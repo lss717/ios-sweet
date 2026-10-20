@@ -48,7 +48,15 @@ Done locally:
 - `xnu/patches/0082-op5-machine-config.patch` adds the `OP5` machine config
   (ARMv8.0 compile flags, Kryo 280 MPIDR validation, platform/CPU matches);
   the staging scripts now also run for `OP5`.
-- `python3 tools/validate-repo.py` passes with 82 patches.
+- `python3 tools/validate-repo.py` passes with 82 patches (the OP5 patch
+  applies after 0081; the sweet-specific branches remain unchanged).
+
+The preparation commit is `52fb90b` and has been pushed to
+`lss717/ios-sweet`.  The repository is a fork and GitHub Actions has not run
+yet (no workflow runs are visible); enable Actions in the fork settings and
+dispatch `xnu.yml` with `machine_config=OP5` to verify the OP5 build.  The
+default push build is still `SWEET`, which checks that the new patch applies
+and does not regress sweet.
 
 Not done yet (blocked on the phone):
 
