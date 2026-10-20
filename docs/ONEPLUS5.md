@@ -152,7 +152,8 @@ No kernel changes yet.
   record the current OxygenOS/firmware version.
 - Back up outside the repository: `boot`, `dtbo`, `vbmeta`, `persist`,
   `modemst1`, `modemst2`, `fsg`, `fsc`, `recovery`. Never commit dumps,
-  serial numbers or Apple artifacts.
+  serial numbers or Apple artifacts.  With the phone in TWRP:
+  `tools/op5-pull-stock.sh backup/op5`.
 - Pull the stock `boot.img` and inspect it with `unpack_bootimg`:
   - boot header version (expected v0 for a 2017 device);
   - whether the DTB is a QCDT table or a separate blob;
@@ -372,7 +373,9 @@ Kernel-side checkpoints:
 3. Record the header version, QCDT layout, kernel/ramdisk addresses and DTB;
    adjust `tools/repack_bootv0.py` if the stock image differs from the
    synthetic round-trip test.
-4. Build and boot the M1 probe image:
+4. Pull the stock partitions and inspect `boot.img`:
+   `tools/op5-pull-stock.sh backup/op5` (TWRP, adb root).
+5. Build and boot the M1 probe image:
    `BOARD=op5 PACKAGE=0 ./shim/build.sh` for the compile check, then
    `BOARD=op5 OP5_BOOT_TEMPLATE=backup/op5/boot.img ./shim/build.sh` for the
    bootable image.
