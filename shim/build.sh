@@ -1,10 +1,26 @@
 #!/bin/bash
-# Build the shim and wrap it in a boot.img v2 that mirrors the stock PixelOS header.
+# Build the shim and wrap it in a boot image.
+#
+#   BOARD=sweet ./build.sh [payload.bin]     # default, boot.img v2
+#   BOARD=op5   ./build.sh [payload.bin]     # OnePlus 5, v0/QCDT repack
+#   PACKAGE=0   ./build.sh                   # compile only (no boot image)
+#
+# For BOARD=op5 the boot image packaging needs a stock boot.img template:
+#   OP5_BOOT_TEMPLATE=/path/to/boot.img BOARD=op5 ./build.sh payload.bin
+# tools/repack_bootv0.py keeps the stock header and QCDT, replacing only the
+# kernel and ramdisk.  See docs/ONEPLUS5.md.
 set -euo pipefail
 cd "$(dirname "$0")"
+BOARD=${BOARD:-sweet}
+case "$BOARD" in
+	sweet) BOARD_DEFS="" ;;
+	op5)   BOARD_DEFS="-DBOARD_OP5" ;;
+	*)     echo "error: unknown BOARD=$BOARD (sweet|op5)" >&2; exit 2 ;;
+esac
+PACKAGE=${PACKAGE:-1}
 CC=aarch64-linux-gnu-gcc
 OBJCOPY=aarch64-linux-gnu-objcopy
-CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
+CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra $BOARD_DEFS"
 mkdir -p out
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c; do
 	$CC $CFLAGS -c $f -o out/${f%.*}.o
@@ -26,11 +42,24 @@ if [ -n "${1:-}" ]; then
 else
 	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
 fi
-mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
-	--dtb ../dtb/boot_unpacked/dtb --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
-	--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \
-	--os_version 17.0.0 --os_patch_level 2035-06 \
-	--cmdline "console=null" -o out/shim-boot.img
-# Host render of the console layout.
-gcc -O1 -Wall -o out/host_test console.c host_test.c && ./out/host_test
-ls -l out/Image out/shim-boot.img
+if [ "$PACKAGE" = 1 ]; then
+	if [ "$BOARD" = op5 ]; then
+		: "${OP5_BOOT_TEMPLATE:?set OP5_BOOT_TEMPLATE to the stock OnePlus 5 boot.img}"
+		python3 ../tools/repack_bootv0.py "$OP5_BOOT_TEMPLATE" out/Image out/ramdisk.bin out/shim-boot.img
+	else
+		command -v mkbootimg >/dev/null 2>&1 || {
+			echo "error: mkbootimg not found (install Android platform tools)" >&2; exit 1; }
+		mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
+			--dtb ../dtb/boot_unpacked/dtb --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
+			--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \
+			--os_version 17.0.0 --os_patch_level 2035-06 \
+			--cmdline "console=null" -o out/shim-boot.img
+	fi
+fi
+# Host render of the console layout (same board constants).
+gcc -O1 -Wall $BOARD_DEFS -o out/host_test console.c host_test.c && ./out/host_test
+if [ "$PACKAGE" = 1 ]; then
+	ls -l out/Image out/shim-boot.img
+else
+	ls -l out/Image
+fi

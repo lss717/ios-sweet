@@ -1,5 +1,43 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## OnePlus 5 port started (2026-10-20)
+
+**Scope (confirmed by the user):** OnePlus 5 (cheeseburger) 8 GB / 128 GB,
+already unlocked; iPhone 8 Plus (D21AP / iPhone10,2) iOS 16.7.16 (20H392)
+userland; `userdata` may be erased; host is the current Linux environment.
+Nothing is flashed to boot/recovery/modem/persist. Full plan: `docs/ONEPLUS5.md`.
+
+**Done (software, no phone attached):**
+- Added `shim/board.h` and `BOARD=op5` selection; OP5 constants are FB
+  `0x9d600000` 1080x1920, GICD `0x17a00000`, GICR `0x17b00000`, PSHOLD
+  `0x010ac000`, IMEM `0x146bf65c`, UFS `0x1da4000`, 4+4 MPIDR list.
+  `BOARD=op5 PACKAGE=0 ./shim/build.sh` compiles; the host render is
+  1080x1920 and the OP5 FB address is in the disassembly.
+- `tools/mkadt.py --board op5` (real D21AP `/product`, 4+4 CPU nodes, MSM8998
+  addresses, 1242x2208 canvas, `home-button-type=1`). Sweet ADT output is
+  byte-identical for a fixed seed. Extracted the real DeviceTree to
+  `research/ipsw-x/d21ap.adt` (Apple artifact, gitignored).
+- `tools/repack_bootv0.py`: v0/QCDT repack that keeps the stock tail;
+  round-trip tested with a synthetic image.
+- `xnu/patches/0082-op5-machine-config.patch`: `OP5` machine config with
+  ARMv8.0 flags (`-march=armv8-a`; current SWEET build is armv8.2-a), Kryo 280
+  MPIDR validation, and OP5 platform/CPU matches. Staging scripts also run
+  for OP5. `validate-repo.py` passes (82 patches).
+- Installed user-level tooling (no root) in `~/.local`: adb/fastboot,
+  mkbootimg/unpack_bootimg, ipsw. `export PATH="$HOME/.local/bin:$PATH"`.
+
+**Not done / blocked:** no device is attached (`adb devices` empty), so the
+stock `boot.img` has not been inspected and no M1 probe image has been booted.
+The next concrete action is M0/M1 on the phone: TWRP temporary boot, partition
+backups, pull stock `boot.img`, verify v0/QCDT with `unpack_bootimg`, then
+build `BOARD=op5 OP5_BOOT_TEMPLATE=... ./shim/build.sh` and `fastboot boot` it.
+
+**Important open risks:** OP5 ABL may not leave UFS/splash in the same state
+as sweet; Kryo 280 is ARMv8.0 (hence the separate compile flags); touch is
+Synaptics S3320 over BLSP I2C with PM8998 L6/L28 rails (RPM, not RPMh).
+
+---
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
