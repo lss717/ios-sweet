@@ -1,6 +1,6 @@
 # OnePlus 5 (cheeseburger) iOS 16 bring-up plan
 
-Status: M0 tooling + M1 software prepared; device boot pending
+Status: M0 done; M1 PASSED on hardware (2026-10-21); M2 pending kernel build
 Target date: 2026-10-20
 Base project: `ios-sweet` (XNU 8796 / iOS 16.7.16 userland on Qualcomm hardware)
 
@@ -42,9 +42,10 @@ Done locally:
   1080x1920 panel / 1242x2208 canvas, MSM8998 GIC/UFS/framebuffer addresses,
   and the real D21AP `/product` node. The iPhone 8 Plus device tree was
   extracted to `research/ipsw-x/d21ap.adt` (gitignored).
-- `tools/repack_bootv0.py` repacks a v0/v1 stock boot image, preserving its
-  QCDT tail; a round-trip test verified kernel/ramdisk replacement and QCDT
-  preservation.
+- `tools/repack_bootv0.py` repacks a v0/v1 stock boot image.  The OP5 stock
+  image is **not QCDT**: its kernel is `Image.gz` with 20 appended DTBs inside
+  the kernel section.  The tool copies that DTB tail after the new gzip kernel
+  and can trim the all-zero partition padding.
 - `xnu/patches/0082-op5-machine-config.patch` adds the `OP5` machine config
   (ARMv8.0 compile flags, Kryo 280 MPIDR validation, platform/CPU matches);
   the staging scripts now also run for `OP5`.
@@ -58,11 +59,38 @@ dispatch `xnu.yml` with `machine_config=OP5` to verify the OP5 build.  The
 default push build is still `SWEET`, which checks that the new patch applies
 and does not regress sweet.
 
-Not done yet (blocked on the phone):
+M0 done on the phone (2026-10-21):
 
-- No device is currently attached (`adb devices` is empty), so the stock
-  `boot.img` has not been inspected and no M1 probe image has been booted.
-- Partition backups, TWRP check and the actual `fastboot boot` test remain.
+- Booted TWRP 3.4.0-1 temporarily and pulled `boot`, `recovery`, `persist`,
+  `modemst1/2`, `fsg`, `fsc` to `backup/op5/` (gitignored).  `userdata` is
+  `/dev/block/sda13`, 121560084480 bytes.
+- Stock `boot.img`: header v0, page 4096, kernel 21533041 bytes starting with
+  gzip, ramdisk 1297198, no QCDT magic, 20 FDTs appended inside the kernel
+  section, followed by all-zero 64 MB partition padding.  TWRP has the same
+  layout with 7 appended DTBs.
+- `fastboot boot` occasionally returns `Failed to load/authenticate boot
+  image: 00000050` after a USB re-enumeration, but succeeds after re-attaching
+  with usbipd and/or re-entering the bootloader.  Do not treat one failure as
+  a permanent restriction.
+
+M1 PASSED on hardware (2026-10-21 ~00:20 local):
+
+- Image: `shim/out/shim-boot-op5-M1-verified.img` (SHA256
+  `e5b9ff8bf4...a71d589`), built as gzip shim + stock DTB tail, trimmed.
+- `fastboot boot` returned OKAY; the panel showed:
+  `SHIM op5 milestone 4: xnu loader`, `INITRD ...`, `LOADER no SWEETXNU
+  payload`, then `UFS milestone 5 probe (read-only)`.
+- UFS: `ver=00000210`, host enabled/ready, TUR/CAP/READ all `rc=00000000`,
+  `LUN0 lastlba=01C627F? blk=00001000`, GPT `EFI PART`, `entries=00000020`,
+  `cache` and `userdata` ext4.  This proves ABL leaves the UFS host and the
+  framebuffer usable on the OP5.
+- The raw (non-gzip) shim did not boot; OP5 ABL needs `Image.gz + DTB tail`.
+
+Not done yet:
+
+- OP5 XNU kernel build and M2 (UFS root + launchd).
+- GitHub Actions is not running on the fork yet; enable it and dispatch
+  `xnu.yml` with `machine_config=OP5`.
 
 This is a bring-up plan, not a usable daily phone OS. The same limitations as
 sweet apply: no GPU, Wi-Fi, Bluetooth, cellular, audio, camera, sensors,
@@ -155,11 +183,12 @@ No kernel changes yet.
   serial numbers or Apple artifacts.  With the phone in TWRP:
   `tools/op5-pull-stock.sh backup/op5`.
 - Pull the stock `boot.img` and inspect it with `unpack_bootimg`:
-  - boot header version (expected v0 for a 2017 device);
-  - whether the DTB is a QCDT table or a separate blob;
+  - boot header version (confirmed v0 on this device);
+  - the DTB layout (confirmed: gzip kernel + appended DTBs, no QCDT);
   - kernel/ramdisk base and offsets.
   The current `shim/build.sh` produces a **boot header v2** image for sweet;
-  OP5 will very likely need a v0 + QCDT image instead.
+  OP5 needs a **v0 image with `Image.gz + appended DTBs`** instead.  The raw
+  shim Image alone does not boot.
 - Verify that the unlocked bootloader accepts an unsigned temporary image, for
   example by booting TWRP with `fastboot boot twrp.img` (do not flash it).
 - Confirm `/dev/block/by-name/userdata` exists in recovery and record its size.
@@ -185,7 +214,7 @@ Files and constants:
 | `shim/shim.c:33` | virtual timer INTID 19 (same) |
 | `shim/shim.c` PSCI probe | CPU_ON targets `0x0,0x1,0x2,0x3,0x100..0x103` |
 | `shim/ufs.c:14` | `UFS_BASE 0x1da4000` |
-| `shim/build.sh` | `BOARD=op5`; v0/QCDT repack using the stock boot.img |
+| `shim/build.sh` | `BOARD=op5`; v0 repack, gzip shim + stock DTB tail |
 | `tools/mkadt.py` | `--board op5` profile, initial constants only |
 
 ADT profile for M1:
@@ -358,7 +387,7 @@ Kernel-side checkpoints:
 | ARMv8.0 vs current v8.2 code generation | High | OP5 machine config with `-march=armv8-a`; check ESR/ELR on SIGILL |
 | Touch rails are off and require RPM | High | Probe `0x20` first; implement minimal RPM vote only if needed |
 | Synaptics RMI4 driver | Medium-high | Start with F01/F11 only |
-| Boot header v0/QCDT packaging | Medium | Inspect stock boot.img and reproduce it exactly |
+| v0 `Image.gz` + appended-DTB packaging | Medium | `repack_bootv0.py --trim` (verified on M1) |
 | 8 Plus canvas/scale mismatch | Medium | Use 1242x2208 @3x and add downscaling; validate FBSDisplayMode |
 | 4+4 cluster handling | Medium | Homogeneous 8-core first, AMP later |
 | No SEP/Touch ID | Low-medium | Same stub approach as Face ID; no passcode |
@@ -370,24 +399,21 @@ Kernel-side checkpoints:
    `adb devices` or `fastboot devices`.
 2. Boot TWRP temporarily and back up the partitions listed in M0. Pull the
    stock `boot.img` and run `unpack_bootimg` on it.
-3. Record the header version, QCDT layout, kernel/ramdisk addresses and DTB;
-   adjust `tools/repack_bootv0.py` if the stock image differs from the
-   synthetic round-trip test.
-4. Pull the stock partitions and inspect `boot.img`:
-   `tools/op5-pull-stock.sh backup/op5` (TWRP, adb root).
-5. Build and boot the M1 probe image:
+3. Build and boot the M1 probe image (already verified):
    `BOARD=op5 PACKAGE=0 ./shim/build.sh` for the compile check, then
    `BOARD=op5 OP5_BOOT_TEMPLATE=backup/op5/boot.img ./shim/build.sh` for the
-   bootable image.
+   bootable image (`Image.gz` + DTB tail).
+4. Build the OP5 XNU kernel through GitHub Actions and boot the M2 payload.
 
 ## 8. Open items
 
 - Exact OxygenOS/firmware version currently installed on the device.
-- Stock `boot.img` / TWRP image for cheeseburger; neither is in the repo.
-- Confirm whether `fastboot boot` is accepted by this bootloader/firmware.
-- Confirm the panel framebuffer address/stride left by the OP5 ABL (M1 probe).
+- GitHub Actions on the fork must be enabled and `xnu.yml` dispatched with
+  `machine_config=OP5`.
+- M2: boot the OP5 XNU build and reach UFS root/launchd.
 - Confirm whether PM8998 L6/L28 are on before the touch driver is written.
 - Expand the 8 GB high-bank size after the live FDT is available.
+- Touch/display/keys are still M3/M4 work.
 
 ## 8.1 Local commands used
 
@@ -405,7 +431,7 @@ python3 tools/mkadt.py shim/out/op5.adt --board op5 --highmem
 # 3. Compile the shim without packaging
 BOARD=op5 PACKAGE=0 ./shim/build.sh
 
-# 4. Package with a pulled stock boot.img (v0/QCDT template)
+# 4. Package with a pulled stock boot.img (v0, gzip + appended DTBs)
 BOARD=op5 OP5_BOOT_TEMPLATE=backup/op5/boot.img ./shim/build.sh shim/out/payload-op5.bin
 ```
 

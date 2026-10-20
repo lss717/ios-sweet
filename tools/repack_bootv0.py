@@ -2,13 +2,19 @@
 """Repack a Qualcomm Android boot image v0/v1 with a new kernel and ramdisk.
 
   repack_bootv0.py TEMPLATE KERNEL RAMDISK OUT [--cmdline STR] [--second FILE]
+                  [--no-dtb-tail] [--trim]
 
 The OnePlus 5 bootloader expects the Android boot header v0 (and possibly a
 QCDT table appended after the second stage), not the v2 header used by sweet.
 This tool keeps the stock header fields, load addresses and the entire tail
 (padding + QCDT + stock DTB entries), replaces the kernel and ramdisk, and
-recomputes the v0 SHA-1 id.  The bootloader still selects its own DTB from the
-unchanged QCDT and passes it to the shim in x0.
+recomputes the v0 SHA-1 id.
+
+Qualcomm boot images may also carry the board DTBs appended inside the kernel
+section (Image.gz-dtb, identified by the 0xd00dfeed FDT magic), not in a QCDT
+table.  The OnePlus 5 stock image does this.  Those bytes are copied from the
+template kernel and appended to the new kernel so ABL can still select the
+matching DTB and pass it to the shim in x0.  Use --no-dtb-tail to disable.
 
 Only v0/v1 images are accepted.  Use the AOSP mkbootimg for v2.
 """
@@ -67,6 +73,10 @@ def main():
     ap.add_argument('out')
     ap.add_argument('--cmdline')
     ap.add_argument('--second', help='replacement second-stage blob (optional)')
+    ap.add_argument('--no-dtb-tail', action='store_true',
+                    help='do not append the template kernel appended-DTB tail')
+    ap.add_argument('--trim', action='store_true',
+                    help='drop an all-zero tail after the three sections')
     args = ap.parse_args()
 
     template = open(args.template, 'rb').read()
@@ -79,6 +89,18 @@ def main():
         page + align(h['kernel_size'], page) + align(h['ramdisk_size'], page) + h['second_size']]
     if not kernel or not ramdisk:
         raise SystemExit('kernel and ramdisk must be non-empty')
+
+    # Qualcomm Image.gz-dtb: the board DTBs can live inside the kernel section.
+    # Keep them after our shim so ABL still finds a DTB for the live tree.
+    kernel_off = page
+    kernel_end = page + h['kernel_size']
+    if not args.no_dtb_tail:
+        pos = template.find(b'\xd0\x0d\xfe\xed', kernel_off, kernel_end)
+        if pos >= 0:
+            dtb_tail = template[pos:kernel_end]
+            kernel += dtb_tail
+            print(f'appending {len(dtb_tail)} bytes of kernel DTB tail from +{pos}',
+                  file=sys.stderr)
 
     # The first page is the padded v0/v1 header.  After the three padded
     # sections the rest is Qualcomm padding + QCDT/DTB and is kept verbatim.
@@ -106,11 +128,15 @@ def main():
     out += kernel + b'\0' * (align(len(kernel), page) - len(kernel))
     out += ramdisk + b'\0' * (align(len(ramdisk), page) - len(ramdisk))
     out += second + b'\0' * (align(len(second), page) - len(second))
+    sections_end = len(out)
     out += tail
+    if args.trim and not tail.strip(b'\0'):
+        del out[sections_end:]
+        print(f'trimmed {len(tail)} zero tail bytes', file=sys.stderr)
     open(args.out, 'wb').write(out)
     print(f'{args.out}: {len(out)} bytes (header v{h["header_version"]}, '
           f'page={page}, kernel={len(kernel)}, ramdisk={len(ramdisk)}, '
-          f'second={len(second)}, tail={len(tail)})', file=sys.stderr)
+          f'second={len(second)}, tail={len(out) - sections_end})', file=sys.stderr)
 
 
 if __name__ == '__main__':

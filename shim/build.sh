@@ -45,7 +45,12 @@ fi
 if [ "$PACKAGE" = 1 ]; then
 	if [ "$BOARD" = op5 ]; then
 		: "${OP5_BOOT_TEMPLATE:?set OP5_BOOT_TEMPLATE to the stock OnePlus 5 boot.img}"
-		python3 ../tools/repack_bootv0.py "$OP5_BOOT_TEMPLATE" out/Image out/ramdisk.bin out/shim-boot.img
+		# OP5 ABL expects Image.gz + appended DTBs (there is no QCDT in the
+		# stock boot image).  repack_bootv0.py copies the stock DTB tail
+		# after the gzip stream and trims the all-zero partition padding.
+		gzip -n -9 -c out/Image > out/Image.gz
+		python3 ../tools/repack_bootv0.py --trim "$OP5_BOOT_TEMPLATE" \
+			out/Image.gz out/ramdisk.bin out/shim-boot.img
 	else
 		command -v mkbootimg >/dev/null 2>&1 || {
 			echo "error: mkbootimg not found (install Android platform tools)" >&2; exit 1; }

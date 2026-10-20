@@ -7,7 +7,7 @@ already unlocked; iPhone 8 Plus (D21AP / iPhone10,2) iOS 16.7.16 (20H392)
 userland; `userdata` may be erased; host is the current Linux environment.
 Nothing is flashed to boot/recovery/modem/persist. Full plan: `docs/ONEPLUS5.md`.
 
-**Done (software, no phone attached):**
+**Done (software):**
 - Added `shim/board.h` and `BOARD=op5` selection; OP5 constants are FB
   `0x9d600000` 1080x1920, GICD `0x17a00000`, GICR `0x17b00000`, PSHOLD
   `0x010ac000`, IMEM `0x146bf65c`, UFS `0x1da4000`, 4+4 MPIDR list.
@@ -17,8 +17,8 @@ Nothing is flashed to boot/recovery/modem/persist. Full plan: `docs/ONEPLUS5.md`
   addresses, 1242x2208 canvas, `home-button-type=1`). Sweet ADT output is
   byte-identical for a fixed seed. Extracted the real DeviceTree to
   `research/ipsw-x/d21ap.adt` (Apple artifact, gitignored).
-- `tools/repack_bootv0.py`: v0/QCDT repack that keeps the stock tail;
-  round-trip tested with a synthetic image.
+- `tools/repack_bootv0.py`: v0 repack that keeps the stock DTB tail;
+  round-trip tested, then verified on the phone (M1).
 - `xnu/patches/0082-op5-machine-config.patch`: `OP5` machine config with
   ARMv8.0 flags (`-march=armv8-a`; current SWEET build is armv8.2-a), Kryo 280
   MPIDR validation, and OP5 platform/CPU matches. Staging scripts also run
@@ -26,15 +26,38 @@ Nothing is flashed to boot/recovery/modem/persist. Full plan: `docs/ONEPLUS5.md`
 - Installed user-level tooling (no root) in `~/.local`: adb/fastboot,
   mkbootimg/unpack_bootimg, ipsw. `export PATH="$HOME/.local/bin:$PATH"`.
 
-**Not done / blocked:** no device is attached (`adb devices` empty), so the
-stock `boot.img` has not been inspected and no M1 probe image has been booted.
-The next concrete action is M0/M1 on the phone: TWRP temporary boot, partition
-backups, pull stock `boot.img`, verify v0/QCDT with `unpack_bootimg`, then
-build `BOARD=op5 OP5_BOOT_TEMPLATE=... ./shim/build.sh` and `fastboot boot` it.
+**M0 done + M1 PASSED (2026-10-21).**
+- TWRP 3.4.0-1 booted temporarily; pulled `boot`, `recovery`, `persist`,
+  `modemst1/2`, `fsg`, `fsc` to `backup/op5/` (gitignored). `userdata` is
+  `/dev/block/sda13`, 121560084480 bytes. TWRP link: `recovery/twrp-cheeseburger.img`
+  (official sha256 d66cbbc7...e0831562).
+- Stock `boot.img` is **v0, not QCDT**: kernel 21533041 bytes starting with
+  gzip, ramdisk 1297198, 20 FDTs appended inside the kernel section, then
+  all-zero 64 MB partition padding. TWRP uses the same `Image.gz-dtb` layout
+  with 7 DTBs. The raw shim Image does not boot; it must be gzipped and keep
+  the stock DTB tail.
+- `tools/repack_bootv0.py` now appends the template kernel DTB tail and
+  `--trim` drops the all-zero padding. `shim/build.sh BOARD=op5` produces
+  `Image.gz + DTB tail`, then v0 repack.
+- `fastboot boot shim/out/shim-boot-op5-M1-verified.img` (SHA256
+  e5b9ff8bf4...a71d589) ran the shim. The panel showed `SHIM op5 milestone 4:
+  xnu loader`, `LOADER no SWEETXNU payload`, `UFS milestone 5 probe
+  (read-only)`. UFS: ver 0x210, host ready, TUR/CAP/READ all rc=0,
+  LUN0 lastlba=0x1c627f?, 4K blocks, GPT EFI PART 32 entries, `cache` and
+  `userdata` ext4. ABL leaves UFS + framebuffer usable.
+- `fastboot boot` sometimes returns `Failed to load/authenticate boot image:
+  00000050` right after a USB re-enumeration; re-attach with usbipd and/or
+  reboot-bootloader, then retry. Raw stock/TWRP images failed in that state
+  too; it is not a permanent bootloader restriction.
 
-**Important open risks:** OP5 ABL may not leave UFS/splash in the same state
-as sweet; Kryo 280 is ARMv8.0 (hence the separate compile flags); touch is
-Synaptics S3320 over BLSP I2C with PM8998 L6/L28 rails (RPM, not RPMh).
+**Next:** enable GitHub Actions on the `lss717/ios-sweet` fork (it is a fork;
+no runs yet), dispatch `xnu.yml` with `machine_config=OP5`, download the
+kernel artifact, then build the M2 payload with the OP5 ADT and a root image.
+Watch for ARMv8.0 SIGILL and the 4+4 CPU startup.
+
+**Important open risks:** Kryo 280 is ARMv8.0 (hence the separate compile
+flags); touch is Synaptics S3320 over BLSP I2C with PM8998 L6/L28 rails (RPM,
+not RPMh); UFS root/HFS and display scaling are still untested on OP5.
 
 ---
 
