@@ -59,6 +59,48 @@ Watch for ARMv8.0 SIGILL and the 4+4 CPU startup.
 flags); touch is Synaptics S3320 over BLSP I2C with PM8998 L6/L28 rails (RPM,
 not RPMh); UFS root/HFS and display scaling are still untested on OP5.
 
+### >>> STOP 2026-10-21: resume here <<<
+
+**Phone / USB state at stop:** the M1 shim ran and the photo confirmed UFS +
+GPT (`cache`/`userdata` ext4).  The shim resets after ~3 min; the phone is now
+likely back in Android or TWRP and its USB is detached from WSL.  To resume:
+phone to bootloader (`adb reboot bootloader` if Android, otherwise
+Power+VolDown), then on Windows
+`usbipd attach --wsl --auto-attach --busid 1-9` (or the current BUSID), then
+`fastboot devices`.  If `fastboot boot` returns
+`Failed to load/authenticate boot image: 00000050`, re-attach/reboot the
+bootloader and retry; this was transient (stock and TWRP images failed in the
+same state).
+
+**Verified artifacts (all outside git):**
+- `backup/op5/{boot,recovery,persist,modemst1,modemst2,fsg,fsc}.img` +
+  `SHA256SUMS`; `userdata` = `/dev/block/sda13`, 121560084480 bytes.
+- `recovery/twrp-cheeseburger.img` (official 3.4.0-1, sha256
+  d66cbbc7...e0831562).
+- `shim/out/shim-boot-op5-M1-verified.img` (sha256
+  e5b9ff8b...a71d589) - M1 gzip shim + stock DTB tail, trimmed.
+- `research/ipsw-x/d21ap.adt` - real iPhone 8 Plus device tree (gitignored).
+- Photo `/home/ls/webwxgetmsgimg.jpg` (M1 panel).
+
+**Git state:** `main` is pushed to `lss717/ios-sweet`; latest OP5 commits are
+`52fb90b`, `5475742`, `7e6a2df` (M0/M1 results, gzip/DTB packaging fix).
+`shim/build.sh BOARD=op5` now produces the correct `Image.gz + DTB tail` +
+v0 image.
+
+**Next action (M2):** the OP5 kernel is not built yet.  The repo is a fork and
+GitHub Actions has no runs (Actions not enabled).  Either enable Actions in the
+fork settings and dispatch `xnu.yml` with `machine_config=OP5`, or authenticate
+the installed `~/.local/bin/gh` (`gh auth login`) and run:
+```
+gh workflow enable xnu.yml -R lss717/ios-sweet
+gh workflow run xnu.yml -R lss717/ios-sweet -f machine_config=OP5
+gh run watch
+gh run download <run-id> -R lss717/ios-sweet -n xnu-kernel -D xnu/out-op5
+```
+Then build the M2 payload with the OP5 ADT + a root image and boot it; watch
+for ARMv8.0 SIGILL, 4+4 CPU startup, UFS root and launchd.  M3/M4 (8 Plus
+display/root, keys/Home/Synaptics touch) are untouched.
+
 ---
 
 ## Agent handoff / active work (2026-10-15, latest)
