@@ -1,0 +1,30 @@
+diff --git a/osfmk/kern/clock.c b/osfmk/kern/clock.c
+--- a/osfmk/kern/clock.c
++++ b/osfmk/kern/clock.c
+@@ -1049,7 +1049,13 @@
+ 
+ #endif /* ENABLE_LEGACY_CLOCK_CODE */
+ 	//Get the UTC time and corresponding sys time
++#if defined(OP5)
++	/* No RTC driver yet: the platform RTC lookup never returns. */
++	secs = 0;
++	microsecs = 0;
++#else
+ 	PEGetUTCTimeOfDay(&secs, &microsecs);
++#endif
+ 	clock_get_system_microtime(&sys, &microsys);
+ 
+ #if ENABLE_LEGACY_CLOCK_CODE
+
+diff --git a/iokit/Kernel/IOStartIOKit.cpp b/iokit/Kernel/IOStartIOKit.cpp
+--- a/iokit/Kernel/IOStartIOKit.cpp
++++ b/iokit/Kernel/IOStartIOKit.cpp
+@@ -78,7 +78,7 @@
+ 	t.tv_nsec = 0;
+ 
+ // RTC is not present on this target
+-#ifndef BCM2837
++#if !defined(BCM2837) && !defined(OP5)
+ 	IOService::waitForService(
+ 		IOService::resourceMatching("IORTC"), &t );
+ #endif
