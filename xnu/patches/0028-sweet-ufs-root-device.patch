@@ -23,11 +23,11 @@ diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
 +	if (strcmp(rdBootVar, "ufsroot0") == 0) {
 +		extern int sweet_ufs_rootdev(dev_t *dev);
 +		OSSafeReleaseNULL(matching);
++		IOLog("SWEET UFS: IOFindBSDRoot root=%s\n", rdBootVar);
 +		int ufs_error = sweet_ufs_rootdev(root);
 +		if (ufs_error) {
 +			panic("IOFindBSDRoot: SWEET UFS root %s unavailable: %d", rdBootVar, ufs_error);
 +		}
-+		IOLog("SWEET UFS: IOFindBSDRoot root=%s\n", rdBootVar);
 +		strlcpy(rootName, rdBootVar, rootNameSize);
 +		IOLog("BSD root: %s, major %d, minor %d\n", rootName, major(*root), minor(*root));
 +		*oflags = 0;
@@ -42,7 +42,7 @@ diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/sweet_ufs.c
-@@ -0,0 +1,539 @@
+@@ -0,0 +1,540 @@
 +/*
 + * SWEET internal UFS root device (read-only).
 + *
@@ -502,6 +502,7 @@ new file mode 100644
 +static int
 +sweet_ufs_init(void)
 +{
++	printf("SWEET UFS: sweet_ufs_init entered\n");
 +	DTEntry node;
 +	uintptr_t const *reg = NULL;
 +	unsigned int size = 0;
