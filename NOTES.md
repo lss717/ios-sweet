@@ -7,6 +7,83 @@ already unlocked; iPhone 8 Plus (D21AP / iPhone10,2) iOS 16.7.16 (20H392)
 userland; `userdata` may be erased; host is the current Linux environment.
 Nothing is flashed to boot/recovery/modem/persist. Full plan: `docs/ONEPLUS5.md`.
 
+### >>> STOP 2026-10-22 00:45 (resume here) <<<
+
+**Where it stands:** XNU runs on the OnePlus 5 and boots through
+`bsd_init` up to `bsd_init: calling IOKitInitializeTime`.  The last boot
+stopped right after that line.  Working theory: `secs=0` in
+`clock_initialize_calendar` triggered the "UTC < sys" warning, whose
+`os_log()` call hangs now that `oslog_stream` is stubbed out (the closed
+firehose library has LSE atomics Kryo 280 does not have).  The fix is
+built but **not booted**:
+
+- image `shim/out/shim-boot-op5-bigcore-bigadt.img`
+  sha256 `fe5c7c97e9a2ecf6b0ce0fafbc54e561c204d70ac57e27ec27783f8068121d37`
+- kernel from CI run **39633868604** (`xnu.yml`, machine_config=OP5),
+  patched by `tools/op5-patch-kernel.py`, payload built with the 4-big-core
+  ADT `shim/out/op5-M2-big.adt`.
+
+**Next action**
+1. Attach the phone to 127, enter fastboot, `fastboot boot
+   shim/out/shim-boot-op5-bigcore-bigadt.img`.
+2. Expect `bsd_init: calling vfsinit`, then `SWEET UFS: IOFindBSDRoot
+   root=cache`, `SWEET UFS: sweet_ufs_init entered`,
+   `SWEET UFS: take_over_host rc=0`, the HFS mount and `exec launchd`.
+3. If it stops again, record the last line.  Next suspects: `vfsinit`,
+   the UFS DMA path (patch 0034, DMA above 4G) and the HFS mount.
+4. If the panel is ambiguous, pull the persistent ring from the **root**
+   partition (cache) in TWRP:
+   `adb exec-out "dd if=/dev/block/by-name/cache bs=4096 skip=64511 count=1025" > ring.bin`
+   (last 4 MiB + 4 KiB of the root partition).
+
+**Build pipeline for the next image** (only step 1 is CI):
+```sh
+gh run download <id> -n xnu-kernel -D xnu/out-op5-new
+python3 tools/op5-patch-kernel.py xnu/out-op5-new/kernel.development.op5 /tmp/opencode/kernel-firehose-off
+python3 tools/mkpayload.py /tmp/opencode/kernel-firehose-off shim/out/op5-M2-big.adt shim/out/payload-op5-big.bin --cmdline "debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsroot=cache unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30"
+cd shim && BOARD=op5 EXTRA_CFLAGS="-DSHIM_DIAG -DSHIM_BIGBOOT" OP5_BOOT_TEMPLATE=../backup/op5/boot.img ./build.sh ../shim/out/payload-op5-big.bin
+cp out/shim-boot.img ../shim/out/shim-boot-op5-bigcore-bigadt.img
+```
+
+**What it took to get here (2026-10-21/22)**
+- **16K pages:** `ID_AA64MMFR0_EL1.TGran16` is 0 on C0-C3 (A53) and 1 on
+  C4-C7 (Kryo 280).  XNU is 16K-only, so the shim starts it on CPU4
+  (MPIDR 0x100) with PSCI CPU_ON (`SHIM_BIGBOOT`); the ADT from
+  `mkadt.py --big-core-boot` lists only 0x100..0x103.  QEMU reproduces the
+  failure on a53/a57/a72 and boots on a75/a76.
+- **LSE:** `-march=armv8-a` is silently ignored by Apple clang (the kernel
+  still had ldadd/casa/stadd).  Patch 0082 now uses `-mcpu=cortex-a53`;
+  patch 0084 gives `commpage_asm.s` ldaxr/stlxr pfz locks.
+- **PAN:** patch 0004 moved `__ARM_PAN_AVAILABLE__` to MACHINE_FLAGS
+  (`=0` for OP5) because installhdrs' unifdef rejects `#if defined(OP5)`
+  in SWEET.h.
+- **firehose:** the kernel links the prebuilt, closed `libfirehose_kernel`
+  which contains LSE.  `tools/op5-patch-kernel.py` rewrites
+  `_oslog_init_firehose` and `_oslog_stream` to `ret` in the downloaded
+  kernel (no os_log streaming).
+- **SMP:** patch 0065 accepts boot MPIDR 0x100 and startAll skips
+  `processor_start()` for the boot CPU (it is already running); the boot
+  now prints `SWEET CPU: 1/1 CPUs initialized, SGI1 verified`.
+- **bsd_init tracing:** patch 0085 sets `DEBUG_BSDINIT=1` for OP5; patch
+  0086 starts the calendar at boot time and skips the 30 s IORTC wait.
+- **Panel:** OP5 is a command-mode DSI panel (s6e3fa3_1080p_cmd) left by
+  ABL with a partial-update window, so the console only shows in a band;
+  a full-screen push needs our own MDSS/DSI driver (M3).  The kernel also
+  still presents the sweet mode 1125x2436, not the 8 Plus 1242x2208
+  canvas from the ADT - M3 item.
+- **Commits this session:** `67a9568` (cortex-a53), `9c101ce` (notes),
+  `2a42163` (shim/tooling), plus 0004/0028/0065/0082/0084/0085/0086.
+
+**Known-good artifacts (gitignored)**
+- `shim/out/shim-boot-op5-bigcore-bigadt.img` - latest (not booted).
+- `xnu/out-op5-new/kernel.development.op5` - run 39633868604.
+- `shim/out/op5-M2-big.adt`, `shim/out/payload-op5-big.bin`.
+- `shim/out/shim-boot-op5-M2-diag.img`, `shim-boot-op5-calib.img`,
+  `shim-boot-op5-bigcore.img` - earlier diagnostics.
+- `backup/op5/boot.img` - stock boot image (DTB tail template).
+- cache partition still holds the 128 MiB HFS mini root (flashed earlier).
+
+
 **Done (software):**
 - Added `shim/board.h` and `BOARD=op5` selection; OP5 constants are FB
   `0x9d600000` 1080x1920, GICD `0x17a00000`, GICR `0x17b00000`, PSHOLD
@@ -141,8 +218,7 @@ Next: build the kernel with cortex-a53 + no PAN, boot it on CPU4 with
 (4 CPUs, MPIDR 0x100..0x103) and try `cpus=4`.  The A53 cluster can never
 run XNU.
 
-Evening update (same day), kernel now reaches late boot:
-- `-mcpu=cortex-a53` still failed on hand-written LSE in
+Evening update (same day), kernel now reaches late boot:- `-mcpu=cortex-a53` still failed on hand-written LSE in
   `osfmk/arm/commpage/commpage_asm.s` (casa in the pfz locks); patch 0084
   adds ldaxr/stlxr versions under `#if defined(OP5)`.
 - The kernel links Apple's prebuilt `libfirehose_kernel` (closed source,

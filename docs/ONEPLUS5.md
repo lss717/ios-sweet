@@ -1,8 +1,7 @@
 # OnePlus 5 (cheeseburger) iOS 16 bring-up plan
 
-Status: M0 done; M1 PASSED on hardware; M2 kernel and boot images built and
-hash-verified (2026-10-21); M2 boot pending (phone not attached to the primary
-host yet)
+Status: M0/M1 done; M2 kernel boots XNU on the Kryo 280 cores up to
+`bsd_init` (2026-10-22); root mount/launchd is the next wall
 Target date: 2026-10-20
 Base project: `ios-sweet` (XNU 8796 / iOS 16.7.16 userland on Qualcomm hardware)
 
