@@ -96,14 +96,71 @@ sha256 `f5de3714...9bf1`); `fsck.hfsplus -f -y` reports the volume OK.  Flash
 it to the **cache** partition (keeps Android `userdata`) and boot with
 `ufsroot=cache rd=ufsroot0`.
 
-**Next:** attach the phone to 127 (it was not attached on 2026-10-21 15:0x:
-`fastboot devices`/`adb devices` empty, no phone in `lsusb`).  Then, in
-fastboot: **check the cache partition size first** (`blockdev --getsize64
-/dev/block/by-name/cache` in TWRP; the mini root is 128 MiB), then
-`fastboot flash cache shim/out/op5-root-mini.img`, then `fastboot boot
-shim/out/shim-boot-op5-M2.img`; watch for ARMv8.0 SIGILL, 4+4 CPU startup,
-UFS root and launchd.  Then `cpus=8`.  M3/M4 (8 Plus display/root, keys/Home/
-Synaptics touch) are untouched.
+**M2 hardware bring-up, 2026-10-21 evening (big-core 16K discovery):**
+
+Phone attached to 127 (udev rule `/etc/udev/rules.d/51-android.rules`:
+2a70/18d1/2717/05c6).  `fastboot flash cache shim/out/op5-root-mini.img`
+OK (256 MiB cache, 113 GiB userdata untouched).  `fastboot boot` of the
+M2 image loads XNU (shim prints `JUMP 000000010148B488`) but the kernel
+never printed anything.
+
+Observations (all from the panel, confirmed with diagnostic shim builds):
+- ABL hands off at **EL1**, and its SCTLR varies between boots: sometimes
+  the MMU is on (`C0080C1D`, ABL page table at ~0x9FF1C000), sometimes off.
+  The loader clears M/C/I before the jump either way.
+- ABL leaves a **command-mode DSI panel** (`s6e3fa3_1080p_cmd`) with a
+  partial-update window, so the shim console only appears in a band; the
+  36 MiB splash region can be filled, but a full-screen push needs our own
+  MDSS/DSI driver (M3).
+- `ID_AA64MMFR0_EL1.TGran16` per cluster (PSCI CPU_ON, each core reads it):
+  **C0-C3 (A53) = 0 -> 16KB granule NOT supported; C4-C7 (Kryo 280)
+  = 1 -> supported.**  XNU/iOS is 16K-only, so the boot CPU must be a big
+  core.  QEMU confirms the same failure on cortex-a53/a57/a72 (no 16K) and
+  success on a75/a76.
+- The shim now PSCI CPU_ONs CPU4 (MPIDR 0x100) with a trampoline
+  (`xnu_boot_tramp`, EL2->EL1 drop, SCTLR clear, entry + boot_args from
+  cleaned `.data`), CPU0 parks in WFE.  With that XNU runs:
+  `SWEET EARLY 1..4` (arm_init, PE_init_platform, ml_parse_cpu_topology,
+  cpu_bootstrap).
+- Next blocker was **LSE atomics** (`stadd w32` -> undefined instruction
+  panic in sleh.c, PC 0x7339024): `-march=armv8-a` is silently ignored by
+  Apple clang, so patch 0082 now uses `-mcpu=cortex-a53`.
+- That exposed **PAN** (`msr pan`, also ARMv8.1, absent on Kryo 280);
+  patch 0004 now defines `__ARM_PAN_AVAILABLE__ 0` for OP5 (all pan users
+  are already `#if`-guarded).
+- QEMU (`tools/qemu-sweet.py`, now with QEMU_FB_BASE/W/H env overrides) runs
+  the same payload to kprintf; it panics at GIC init only because QEMU has
+  no MSM8998 GIC.
+
+Diagnostic artifacts (gitignored): `shim/out/shim-boot-op5-bigcore.img`,
+`shim/out/shim-boot-op5-M2-diag.img` (EL/SCTLR/MMFR0 prints),
+`shim/out/shim-boot-op5-calib.img` (1 MiB colour bands).
+
+Next: build the kernel with cortex-a53 + no PAN, boot it on CPU4 with
+`cpus=1`; if it gets past cpu_bootstrap, make a **big-cores-only ADT**
+(4 CPUs, MPIDR 0x100..0x103) and try `cpus=4`.  The A53 cluster can never
+run XNU.
+
+Evening update (same day), kernel now reaches late boot:
+- `-mcpu=cortex-a53` still failed on hand-written LSE in
+  `osfmk/arm/commpage/commpage_asm.s` (casa in the pfz locks); patch 0084
+  adds ldaxr/stlxr versions under `#if defined(OP5)`.
+- The kernel links Apple's prebuilt `libfirehose_kernel` (closed source,
+  compiled with LSE: `ldadd/casa/stadd`).  Patching the *source* is not
+  possible; `tools/op5-patch-kernel.py` rewrites the entry of
+  `_oslog_init_firehose` and `_oslog_stream` to `ret` in the downloaded
+  kernel (no firehose tracing).  Applied before mkpayload.py.
+- Patch 0065 now accepts boot MPIDR 0x100 and skips `processor_start` for
+  the boot CPU in startAll (it is already running).
+- Observed boots: VM bootstrap done (85 maps), IOKit IOMD, ATM, OSLog
+  stream, scheduler, BANK, IPC, PRNG, pthread, AMFI, then
+  `SWEET CPU: cpu=0 entered initCPU mpidr=0x100 EL1 IRQs=1`.
+  The boot then stops there (no panic, no "came alive" line); the console
+  also shows `SWEET FB: AppleCLCD 1080x1920 ... presented as 1125x2436`
+  (the framebuffer driver still uses the iPhone X mode from sweet).
+- Still unknown: where it stops after initCPU (next build logs every
+  processor_start and skips the boot CPU).  The persistent log ring stays
+  empty on `cache`, so nothing reached the UFS mount.
 
 **Important open risks:** Kryo 280 is ARMv8.0 (hence the separate compile
 flags); touch is Synaptics S3320 over BLSP I2C with PM8998 L6/L28 rails (RPM,
