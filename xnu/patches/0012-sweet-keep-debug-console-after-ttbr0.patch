@@ -1,7 +1,7 @@
 diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 --- a/osfmk/arm64/arm_vm_init.c
 +++ b/osfmk/arm64/arm_vm_init.c
-@@ -1825,6 +1825,32 @@
+@@ -1825,6 +1825,41 @@
  #define ARM64_PHYSMAP_ALIGNMENT_PADDING (PTOV_TABLE_SIZE * ARM_TT_TWIG_SIZE)
  #endif
  
@@ -12,6 +12,15 @@ diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 + * for a Normal-NC framebuffer alias that survives bootstrap TTBR0 teardown.
 + */
 +#define SWEET_EARLY_FB_VA (VM_MIN_KERNEL_ADDRESS + ARM_TT_L2_SIZE)
++/*
++ * OP5's splash framebuffer (0x9d600000) is 22MB into the 32MB block that
++ * contains sweet's 0x9c000000 one; the alias maps the block base.
++ */
++#if defined(OP5)
++#define SWEET_EARLY_FB_VA_OFFSET 0x1600000ULL
++#else
++#define SWEET_EARLY_FB_VA_OFFSET 0ULL
++#endif
 +
 +static void
 +sweet_early_map_final(void)
@@ -34,7 +43,7 @@ diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  void
  arm_vm_init(uint64_t memory_size, boot_args * args)
  {
-@@ -2153,20 +2179,28 @@
+@@ -2153,20 +2188,28 @@
  
  	arm_set_user_tbi();
  
@@ -51,7 +60,7 @@ diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 -	sweet_early_disable();
 +#if defined(SWEET)
 +	/* The final TTBR1 is live; leave the outgoing VA=PA framebuffer alias. */
-+	sweet_early_relocate(SWEET_EARLY_FB_VA);
++	sweet_early_relocate(SWEET_EARLY_FB_VA + SWEET_EARLY_FB_VA_OFFSET);
 +#endif
  	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
  
@@ -65,7 +74,7 @@ diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  
  	// From here on out, we're off the bootstrap translation tables.
  
-@@ -2259,7 +2293,9 @@
+@@ -2259,7 +2302,9 @@
      }
  #endif
  #endif
@@ -75,7 +84,7 @@ diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  
  	disable_preemption();
  
-@@ -2310,6 +2346,7 @@
+@@ -2310,6 +2355,7 @@
  		va_l1 = va_l2_end;
  		cpu_l1_tte++;
  	}
@@ -96,17 +105,26 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
   */
  #include <arm64/sweet_early.h>
  
-@@ -10,7 +11,8 @@
+@@ -10,7 +11,16 @@
  #include <stdint.h>
  #include <kern/misc_protos.h>
  
 -#define EARLY_FB ((volatile uint32_t *)(uintptr_t)0x9c000000)
++#if defined(OP5)
++static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9d600000;
++#else
 +static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9c000000;
++#endif
 +#define EARLY_FB early_fb
  #define EARLY_WIDTH 1080u
- #define EARLY_HEIGHT 2400u
+-#define EARLY_HEIGHT 2400u
++#if defined(OP5)
++#define EARLY_HEIGHT 1920u
++#else
++#define EARLY_HEIGHT 2400u
++#endif
  #define EARLY_STRIDE (4320u / 4)
-@@ -87,18 +89,21 @@
+@@ -87,18 +97,21 @@
  void
  sweet_early_mark(unsigned int stage, const char *label)
  {
@@ -132,7 +150,7 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
  	sweet_early_string(": ");
  	sweet_early_string(label);
  	sweet_early_putc('\n');
-@@ -121,9 +126,17 @@
+@@ -121,9 +134,17 @@
  }
  
  void
