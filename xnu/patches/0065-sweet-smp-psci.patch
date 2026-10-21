@@ -76,7 +76,7 @@
  	}
  	if (!IOCPU::start(provider)) {
  		return false;
-@@ -77,21 +106,76 @@
+@@ -77,21 +106,83 @@
  		panic("SWEET CPU: PMI routing is not implemented");
  	}
  
@@ -128,7 +128,14 @@
 +	}
 +	for (unsigned int i = 0; i < topology->num_cpus; i++) {
 +		SweetCPU *cpu = __atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE);
-+		kern_return_t kr = processor_start(cpu->machProcessor);
++		kern_return_t kr;
++		if (i == topology->boot_cpu->cpu_id) {
++			IOLog("SWEET CPU: cpu=%u is the boot CPU (already running)\n", i);
++			continue;
++		}
++		IOLog("SWEET CPU: starting cpu=%u\n", i);
++		kr = processor_start(cpu->machProcessor);
++		IOLog("SWEET CPU: cpu=%u processor_start -> %d\n", i, kr);
 +		if (kr != KERN_SUCCESS) {
 +			panic("SWEET CPU: cpu=%u processor_start failed: %d", i, kr);
 +		}
