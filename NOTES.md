@@ -80,21 +80,24 @@ today):
 - Ramdisk in the boot image is byte-identical to the payload; DTB tail comes
   from `backup/op5/boot.img`.
 
-**M2 root blocker (next session):** the host is WSL2, whose kernel has no
-`hfsplus` module and `apfs-fuse` is not packaged; `hfsprogs` can create an
-HFS+ image but not populate it.  A locally built `libhfsp` writer can insert a
-static `/sbin/launchd` but its write path is unsafe (it corrupted the extents
-B-tree; several endian/offset bugs were found).  **No valid mini HFS root
-exists yet.**  Options: fix libhfsp (it needs `volume_open`'s volume-header
-write at 512-byte block 2, big-endian B-tree backpointers, `UInt32` typedefs,
-thread records), or use a Linux guest/host with the real `hfsplus` driver.
-The plan is still to flash the mini root to the **cache** partition (keeps
-Android `userdata`) and boot `ufsroot=cache rd=ufsroot0`.
+**Host migration DONE (2026-10-21):** the project now lives on
+`ls@192.168.10.127` (Ubuntu 24.04, x86_64) in `/home/ls/ios-sweet`.  The
+gitignored artifacts (`backup/`, `recovery/`, `research/ipsw-x/`, `shim/out/`,
+`xnu/out-op5/`) were rsynced and hash-verified; adb/fastboot/gh/ipsw,
+`~/.config/gh`, the adb key and the static init were copied too.  The target
+has a real `hfsplus` kernel module, so the WSL2 HFS blocker is gone.  The WSL
+copy is kept as a cold backup; **127 is now the primary host.**
 
-**Next:** next hardware session, attach the phone (Power+VolDown, then
-`usbipd attach --wsl --auto-attach --busid <BUSID>`), `fastboot boot
-shim/out/shim-boot-op5-M2.img` first with a kernel-only/ramdisk test or after
-writing the mini root to `cache`; watch for ARMv8.0 SIGILL, 4+4 CPU startup,
+**M2 mini HFS root READY (on 127):** `shim/out/op5-root-mini.img` (128 MiB,
+sha256 `c4a8610a...474b`), `/sbin/launchd` = the static init (16635 bytes,
+sha256 `f5de3714...9bf1`); `fsck.hfsplus -f -y` reports the volume OK.  Flash
+it to the **cache** partition (keeps Android `userdata`) and boot with
+`ufsroot=cache rd=ufsroot0`.
+
+**Next:** hardware session from whichever host has the phone (currently the
+WSL/USBIPD box, or 127 if the phone is plugged there): `fastboot flash cache
+shim/out/op5-root-mini.img`, then `fastboot boot
+shim/out/shim-boot-op5-M2.img`; watch for ARMv8.0 SIGILL, 4+4 CPU startup,
 UFS root and launchd.  Then `cpus=8`.  M3/M4 (8 Plus display/root,
 keys/Home/Synaptics touch) are untouched.
 

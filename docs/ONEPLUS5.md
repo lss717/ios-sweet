@@ -101,14 +101,17 @@ M2 kernel build PASSED (2026-10-21):
   `shim/out/payload-op5-M2.bin` and `shim/out/shim-boot-op5-M2.img`
   (sha256 `dce93bc4...500e`, cmdline `cpus=1 ... ufsroot=cache`).
 
+Host migration (2026-10-21): the project moved to `ls@192.168.10.127`
+(Ubuntu 24.04, x86_64).  All gitignored artifacts and tooling were copied and
+hash-verified.  That host has the real `hfsplus` kernel module, so the mini
+root was built there: `shim/out/op5-root-mini.img` (128 MiB, `fsck` OK) with
+`/sbin/launchd` = the static init.
+
 Not done yet:
 
 - M2 boot on hardware (UFS root + launchd) and `cpus=8`.
-- A valid mini HFS+ root.  This WSL2 host has no `hfsplus` kernel module and
-  `apfs-fuse` is not packaged; `hfsprogs` only creates an empty image.  A
-  locally patched `libhfsp` writer was not reliable enough to use.  Build the
-  root on a host/Linux guest with HFS+ write support, then flash it to
-  `cache` (or `userdata` for M3).
+- Flash the mini root to the `cache` partition and boot the M2 image from the
+  host that has the phone attached.
 
 This is a bring-up plan, not a usable daily phone OS. The same limitations as
 sweet apply: no GPU, Wi-Fi, Bluetooth, cellular, audio, camera, sensors,
@@ -413,11 +416,10 @@ Kernel-side checkpoints:
 
 ## 7. Next concrete action
 
-1. Prepare a valid HFS+ mini root **on a host with HFS+ write support**:
-   `/sbin/launchd` = the static init from `tools/mkinit.py`, then `fsck` it.
-2. Connect the OP5 in fastboot, `usbipd attach --wsl --auto-attach --busid
-   <BUSID>`, and `fastboot flash cache mini-hfs.img` (keeps `userdata`).
-3. `fastboot boot shim/out/shim-boot-op5-M2.img` (kernel run 39546720041).
+1. On the host with the phone, enter fastboot (`usbipd attach --wsl
+   --auto-attach --busid <BUSID>` if using WSL) and run
+   `fastboot flash cache shim/out/op5-root-mini.img` (keeps `userdata`).
+2. `fastboot boot shim/out/shim-boot-op5-M2.img` (kernel run 39546720041).
    Expect `SWEET UFS`, `BSD root: ufsroot0`, `hfs: mounted`, `exec launchd`,
    then `SWEET userspace: init running as PID 1`; pull the persistent log via
    TWRP.  Then retry with `cpus=8`.
