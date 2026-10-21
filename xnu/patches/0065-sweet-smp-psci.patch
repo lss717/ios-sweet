@@ -76,7 +76,7 @@
  	}
  	if (!IOCPU::start(provider)) {
  		return false;
-@@ -77,21 +106,75 @@
+@@ -77,21 +106,76 @@
  		panic("SWEET CPU: PMI routing is not implemented");
  	}
  
@@ -121,9 +121,10 @@
 +		}
 +		IOSleep(1);
 +	}
-+	/* The supplied ADT has cpu0 as the boot CPU and ascending A55 nodes. */
-+	if (topology->boot_cpu->cpu_id != 0 || topology->boot_cpu->phys_id != 0) {
-+		panic("SWEET CPU: expected boot MPIDR 0 and logical CPU 0");
++	/* The supplied ADT has cpu0 as the boot CPU; OP5 boots on MPIDR 0x100. */
++	if (topology->boot_cpu->cpu_id != 0 ||
++	    (topology->boot_cpu->phys_id & ~0x100u) != 0) {
++		panic("SWEET CPU: expected boot MPIDR 0 (or 0x100 on OP5) and logical CPU 0");
 +	}
 +	for (unsigned int i = 0; i < topology->num_cpus; i++) {
 +		SweetCPU *cpu = __atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE);
