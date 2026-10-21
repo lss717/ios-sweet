@@ -128,11 +128,17 @@ def product_props(path):
     raise SystemExit(f'{path}: no /product node')
 
 
-def build(seed=None, qemu=False, highmem=False, board='sweet'):
+def build(seed=None, qemu=False, highmem=False, board='sweet',
+          big_core_boot=False):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ."""
     if board not in BOARDS:
         raise SystemExit(f'unknown board {board!r} (choose from {", ".join(BOARDS)})')
     b = BOARDS[board]
+    # OP5: the A53 cluster has no 16KB granule, so XNU can only run on
+    # the Kryo 280 cluster.  List only those CPUs and make 0x100 cpu0.
+    board_cpus = b['cpus']
+    if big_core_boot:
+        board_cpus = [c for c in board_cpus if c[0] >= 0x100] or board_cpus
     phys_base, mem_size = (b['high_phys_base'], b['high_mem_size']) if highmem else (b['phys_base'], b['mem_size'])
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (b['gicd'], b['gicr'], b['timebase'])
     vtimer = QEMU_VTIMER_INTID if qemu else b['vtimer']
@@ -187,7 +193,7 @@ def build(seed=None, qemu=False, highmem=False, board='sweet'):
     # QEMU retains its original single-CPU tree: its MPIDRs differ from the
     # hardware boards.
     cpu_nodes = []
-    cpus = [(0, 0, 0, 0, b['cpus'][0][4])] if qemu else b['cpus']
+    cpus = [(0, 0, 0, 0, board_cpus[0][4])] if qemu else board_cpus
     for core, (mpidr, cluster, cluster_core, l2, hz) in enumerate(cpus):
         cpu_nodes.append(node(f'cpu{core}', [
             ph(),
@@ -299,8 +305,11 @@ def main():
     ap.add_argument('--dump', action='store_true')
     ap.add_argument('--qemu', action='store_true')
     ap.add_argument('--highmem', action='store_true')
+    ap.add_argument('--big-core-boot', action='store_true',
+                    help='OP5: only the Kryo 280 cluster (MPIDR 0x100-0x103)')
     args = ap.parse_args()
-    root = build(qemu=args.qemu, highmem=args.highmem, board=args.board)
+    root = build(qemu=args.qemu, highmem=args.highmem, board=args.board,
+                 big_core_boot=args.big_core_boot)
     blob = adt.serialize(root)
     open(args.out, 'wb').write(blob)
     if args.dump:
