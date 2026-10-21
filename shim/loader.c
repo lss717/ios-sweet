@@ -65,6 +65,17 @@ static void zero64(uintptr_t dst, uint64_t n)
 		d[i] = 0;
 }
 
+/*
+ * The ABL on the OP5 leaves the MMU and the D-cache on, so our copies may
+ * still be dirty in cache when we hand over with caches off.  Push them out.
+ */
+static void clean_dcache(uintptr_t start, uintptr_t end)
+{
+	for (uintptr_t a = start & ~(uintptr_t)63; a < end; a += 64)
+		__asm__ volatile("dc civac, %0" :: "r"(a) : "memory");
+	__asm__ volatile("dsb sy" ::: "memory");
+}
+
 static int magic_ok(const char *m)
 {
 	static const char want[] = "SWEETXNU";
@@ -136,9 +147,87 @@ const char *loader_boot(uintptr_t dtb)
 	ba->memSizeActual = p->mem_size;
 	con_hex2("BOOTARG", "pa=", ba_pa, "top=", top);
 
+	clean_dcache(p->phys_base, top);
+
 	uintptr_t entry_pa = p->entry_va + pa_of_va_base;
 	con_hex("JUMP", entry_pa);
 	con_str("XNU", "jumping (fbcon clears screen)");
+
+	uint64_t sctlr0;
+	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr0));
+
+#ifdef SHIM_DIAG
+	{
+		extern uint64_t drop_to_el1(void);
+		extern volatile uint64_t diag_sctlr, diag_ttbr0, diag_tcr;
+		uint64_t el0, ttbr0, tcr;
+		__asm__ volatile("mrs %0, currentel" : "=r"(el0));
+		__asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr0));
+		__asm__ volatile("mrs %0, tcr_el1" : "=r"(tcr));
+		diag_sctlr = sctlr0;
+		diag_ttbr0 = ttbr0;
+		diag_tcr = tcr;
+		con_hex2("EL", "cur=", (uint32_t)(el0 >> 2),
+			 "drop=", (uint32_t)drop_to_el1());
+		con_hex2("S0", "lo=", (uint32_t)(sctlr0 & 0xff), "x", 0);
+		con_hex2("TTBR0", "pa=", (uint32_t)ttbr0,
+			 "hi=", (uint32_t)(ttbr0 >> 32));
+	}
+#endif
+
+	/*
+	 * The OnePlus 5 ABL hands off with the MMU ON (sweet's leaves it off).
+	 * XNU's start.s uses PC-relative adrp results as physical addresses, so
+	 * it must be entered with translation disabled; otherwise its first
+	 * bootstrap-pagetable access faults into its own "b ." vector.
+	 */
+	if (sctlr0 & 1) {
+		uint64_t off = sctlr0 & ~(uint64_t)((1u << 0) | (1u << 2) | (1u << 12));
+		__asm__ volatile("msr sctlr_el1, %0" :: "r"(off) : "memory");
+		__asm__ volatile("isb; ic iallu; dsb sy; isb" ::: "memory");
+	}
+
+#ifdef SHIM_DIAG
+	{
+		uint64_t sctlr1;
+		__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr1));
+		con_hex2("S1", "lo=", (uint32_t)(sctlr1 & 0xff), "x", 0);
+	}
+#endif
+
+#ifdef SHIM_BIGBOOT
+	/*
+	 * Kryo 280's A53 cluster has no 16KB granule (ID_AA64MMFR0.TGran16=0)
+	 * but the A73-derived big cores do, so start XNU on CPU4 (0x100).
+	 */
+	{
+		extern void xnu_boot_tramp(void);
+		extern volatile uint64_t xnu_boot_tramp_entry;
+		extern int64_t shim_psci_cpu_on(uint64_t, uint64_t, uint64_t);
+		extern void shim_delay_ms(unsigned);
+		int64_t rc;
+
+		xnu_boot_tramp_entry = entry_pa;
+		clean_dcache((uintptr_t)&xnu_boot_tramp_entry,
+			     (uintptr_t)&xnu_boot_tramp_entry + 64);
+		con_hex2("BIG", "mpidr=", (uint32_t)0x100, "a", 0);
+		for (int i = 0; i < 6; i++) {
+			rc = shim_psci_cpu_on(0x100, (uintptr_t)xnu_boot_tramp,
+					      ba_pa);
+			if (rc == 0)
+				break;
+			shim_delay_ms(300);
+		}
+		con_hex2("BIG", "rc=", (uint32_t)rc, "a", 0);
+		if (rc != 0) {
+			extern void shim_reset(unsigned);
+			shim_delay_ms(60000);
+			shim_reset(10);
+		}
+		for (;;)
+			__asm__ volatile("wfe");
+	}
+#endif
 
 	/* Everything was written with the MMU and caches off; drop any stale I-cache lines too. */
 	__asm__ volatile("dsb sy; ic iallu; dsb sy; isb" ::: "memory");

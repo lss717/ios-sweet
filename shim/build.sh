@@ -20,7 +20,7 @@ esac
 PACKAGE=${PACKAGE:-1}
 CC=aarch64-linux-gnu-gcc
 OBJCOPY=aarch64-linux-gnu-objcopy
-CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra $BOARD_DEFS"
+CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra $BOARD_DEFS ${EXTRA_CFLAGS:-}"
 mkdir -p out
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c; do
 	$CC $CFLAGS -c $f -o out/${f%.*}.o
@@ -33,7 +33,9 @@ $CC $CFLAGS -static -T shim.ld -Wl,--build-id=none -Wl,--no-warn-rwx-segments -W
 	out/start.o out/shim.o out/console.o out/mmu.o out/fdt.o out/loader.o out/ufs.o -o out/shim.elf
 $OBJCOPY -O binary out/shim.elf out/Image
 # ABL copies the file; pad to image_size so .bss/stacks exist as zeroed bytes.
-size=$(aarch64-linux-gnu-nm out/shim.elf | awk '$3=="_end"{print strtonum("0x"$1)}')
+end_sym=$(aarch64-linux-gnu-nm out/shim.elf | awk '$3=="_end"{print $1}')
+[ -n "$end_sym" ] || { echo "error: _end not found in shim.elf" >&2; exit 1; }
+size=$((16#$end_sym))
 truncate -s "$size" out/Image
 # Ramdisk: an xnu payload (tools/mkpayload.py) if given as $1, else an empty
 # newc cpio (ABL dislikes a zero-size ramdisk on some builds) -> diagnostics.

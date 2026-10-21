@@ -56,6 +56,92 @@ secondary_entry:
 	b	4b
 
 /*
+ * Entry point for PSCI CPU_ON when XNU is started on a big (Kryo 280) core.
+ * x0 = boot_args physical address (PSCI context); the kernel entry physical
+ * address is in xnu_boot_tramp_entry.
+ */
+	.globl xnu_boot_tramp
+xnu_boot_tramp:
+	msr	daifset, #0xf
+	/* Secondary cores may come up at EL2; drop to EL1h first. */
+	mrs	x2, currentel
+	cmp	x2, #0x8
+	b.ne	7f
+	mrs	x2, hcr_el2
+	mov	x3, #1
+	lsl	x3, x3, #31
+	orr	x2, x2, x3
+	bic	x2, x2, #0x1
+	bic	x2, x2, #(1 << 3)
+	bic	x2, x2, #(1 << 4)
+	bic	x2, x2, #(1 << 5)
+	bic	x2, x2, #(1 << 27)
+	bic	x2, x2, #(1 << 34)
+	msr	hcr_el2, x2
+	mov	x3, #3
+	msr	cnthctl_el2, x3
+	msr	cntvoff_el2, xzr
+	mov	x3, #0x3c5
+	msr	spsr_el2, x3
+	adr	x3, 7f
+	msr	elr_el2, x3
+	isb
+	eret
+7:
+	mrs	x2, sctlr_el1
+	bic	x2, x2, #1		/* MMU off */
+	bic	x2, x2, #4		/* D-cache off */
+	bic	x2, x2, #(1 << 12)	/* I-cache off */
+	msr	sctlr_el1, x2
+	isb
+	adr	x1, xnu_boot_tramp_entry
+	ldr	x1, [x1]
+	br	x1
+
+	.data
+	.balign	8
+	.globl xnu_boot_tramp_entry
+xnu_boot_tramp_entry:
+	.quad	0
+
+	.text
+
+/*
+ * If ABL handed us EL2 (iBoot runs XNU at EL1), drop to EL1h before the
+ * kernel entry.  The kernel installs only a VBAR_EL1 and its early writes
+ * (OSLAR_EL1) assume EL1.  Returns 1 if it dropped, 0 if already EL1.
+ */
+	.globl drop_to_el1
+drop_to_el1:
+	mrs	x1, currentel
+	cmp	x1, #0x8
+	b.ne	2f
+	mrs	x2, hcr_el2
+	mov	x3, #1
+	lsl	x3, x3, #31
+	orr	x2, x2, x3		/* RW=1: EL1 is AArch64 */
+	bic	x2, x2, #0x1		/* VM=0: stage 2 off */
+	bic	x2, x2, #(1 << 3)	/* FMO=0 */
+	bic	x2, x2, #(1 << 4)	/* IMO=0 */
+	bic	x2, x2, #(1 << 5)	/* AMO=0 */
+	bic	x2, x2, #(1 << 27)	/* TGE=0 */
+	bic	x2, x2, #(1 << 34)	/* E2H=0 */
+	msr	hcr_el2, x2
+	mov	x3, #3			/* EL1PCTEN | EL1PCEN */
+	msr	cnthctl_el2, x3
+	msr	cntvoff_el2, xzr
+	mov	x3, #0x3c5		/* EL1h, DAIF masked */
+	msr	spsr_el2, x3
+	adr	x3, 1f
+	msr	elr_el2, x3
+	isb
+	eret
+1:	mov	x0, #1
+	ret
+2:	mov	x0, #0
+	ret
+
+/*
  * Exception vectors. Each slot stashes x29/x30, loads its slot number
  * and jumps to the common path, which saves x0-x28 and calls
  * exc_handler(slot, regs). IRQs return; everything else ends in the

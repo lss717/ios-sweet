@@ -26,6 +26,14 @@ void con_clear(uint32_t bg)
 	row = 0;
 }
 
+void con_fill_region(uintptr_t pa, uint64_t bytes, uint32_t bg)
+{
+	volatile uint32_t *p = (volatile uint32_t *)pa;
+
+	for (uint64_t i = 0; i < bytes / 4; i++)
+		p[i] = bg;
+}
+
 static void put_char(int col, char ch, uint32_t fg)
 {
 	if (ch < 0x20 || ch > 0x7e)
@@ -94,4 +102,29 @@ void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint
 		put_str(col, buf, WHITE);
 	}
 	row++;
+}
+
+void con_banner(uintptr_t pa, const char *s, uint32_t fg, uint32_t bg)
+{
+	volatile uint32_t *base = (volatile uint32_t *)pa;
+
+	for (int i = 0; s[i]; i++) {
+		char ch = s[i];
+		if (ch < 0x20 || ch > 0x7e)
+			ch = '?';
+		const unsigned char *g = font8x16[ch - 0x20];
+		int x0 = 8 + i * CH_W, y0 = 8;
+		if (x0 + CH_W > FB_W)
+			break;
+		for (int gy = 0; gy < 16; gy++)
+			for (int gx = 0; gx < 8; gx++) {
+				uint32_t c = (g[gy] & (0x80 >> gx)) ? fg : bg;
+				for (int sy = 0; sy < SCALE; sy++) {
+					volatile uint32_t *p = base + (y0 + gy * SCALE + sy) * (FB_STRIDE / 4)
+							       + x0 + gx * SCALE;
+					for (int sx = 0; sx < SCALE; sx++)
+						p[sx] = c;
+				}
+			}
+	}
 }

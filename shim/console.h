@@ -13,8 +13,14 @@
 extern volatile uint32_t *con_fb;
 
 void con_clear(uint32_t bg);
+/* Fill a whole physical region with one colour (OP5: the 36 MiB splash
+ * region; the panel only behaves once the entire region is written). */
+void con_fill_region(uintptr_t pa, uint64_t bytes, uint32_t bg);
 void con_skip(void);
 void con_str(const char *label, const char *s);
 void con_hex(const char *label, uint64_t v);
 /* label, then "a=xxxxxxxx b=xxxxxxxx" style pairs of 32-bit values */
 void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint32_t vb);
+/* Draw one short string at an arbitrary byte offset inside the framebuffer,
+ * with an explicit background (calibration pattern labels). */
+void con_banner(uintptr_t pa, const char *s, uint32_t fg, uint32_t bg);

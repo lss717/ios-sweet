@@ -51,9 +51,47 @@ static inline void wr32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; 
 static inline void wr8(uintptr_t a, uint8_t v) { *(volatile uint8_t *)a = v; }
 
 extern char secondary_entry[];
+extern char vectors[];
+
+#ifdef SHIM_CALIB
+/*
+ * Calibration pattern for the OP5 command-mode panel.  ABL leaves a partial
+ * ROI active, so fill the whole splash_region with 1 MiB colour bands
+ * labelled MB00..MB35 (three x positions each) to work out the mapping.
+ */
+static void calib_pattern(void)
+{
+	volatile uint32_t *fb = (volatile uint32_t *)FB_BASE;
+	const uint32_t total = 0x2400000U;	/* splash_region@9d600000 */
+	const uint32_t row_words = FB_STRIDE / 4;
+
+	for (uint32_t i = 0; i < total / 4; i++) {
+		uint32_t mb = (i * 4) >> 20;
+		uint32_t r = ((mb * 67) % 180) + 60;
+		uint32_t g = ((mb * 131) % 180) + 60;
+		uint32_t b = ((mb * 29) % 180) + 60;
+		fb[i] = 0xff000000U | (r << 16) | (g << 8) | b;
+	}
+	for (uint32_t m = 0; m < total >> 20; m++) {
+		uint32_t off = m << 20;
+		char lbl[5] = "MB00";
+		lbl[2] = (char)('0' + m / 10);
+		lbl[3] = (char)('0' + m % 10);
+		uint32_t bg = fb[off / 4];
+		for (int k = 0; k < 3; k++)
+			con_banner(FB_BASE + off + (uintptr_t)(k * 400 * 4), lbl,
+				   WHITE, bg);
+		for (int y = 0; y < 4; y++)
+			for (uint32_t x = 0; x < FB_W; x++)
+				fb[off / 4 + y * row_words + x] = WHITE;
+	}
+}
+#endif
 
 static const char *stage;	/* set at runtime: no absolute pointers in data */
+volatile uint64_t diag_sctlr, diag_ttbr0, diag_tcr;
 static volatile uint64_t sec_mpidr[NR_CPUS];
+static volatile uint64_t sec_mmfr0[NR_CPUS];
 static volatile uint64_t sec_probe[4];	/* CPU1 redistributor write test */
 static volatile uint32_t irq_count, irq_other, irq_last;
 static volatile int irq_src;
@@ -82,6 +120,12 @@ static uint64_t smc(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3)
 	return x0;
 }
 
+/* PSCI CPU_ON, used to hand XNU to a 16K-capable big core. */
+int64_t shim_psci_cpu_on(uint64_t mpidr, uint64_t entry, uint64_t ctx)
+{
+	return (int64_t)smc(PSCI_CPU_ON, mpidr, entry, ctx);
+}
+
 static uint64_t now(void)
 {
 	isb();
@@ -95,6 +139,11 @@ static void delay_ms(unsigned ms)
 		;
 }
 
+void shim_delay_ms(unsigned ms)
+{
+	delay_ms(ms);
+}
+
 static void __attribute__((noreturn)) reset(unsigned after_s)
 {
 	con_skip();
@@ -106,6 +155,11 @@ static void __attribute__((noreturn)) reset(unsigned after_s)
 	wr32(PSHOLD, 0);
 	for (;;)
 		__asm__ volatile("wfe");
+}
+
+void shim_reset(unsigned after_s)
+{
+	reset(after_s);
 }
 
 /* ---- exceptions ---- */
@@ -130,8 +184,15 @@ static void irq_handler(void)
 	isb();
 }
 
+static uint64_t cpu_el(void)
+{
+	return (rsr("currentel") >> 2) & 3;
+}
+
 void exc_handler(uint64_t slot, uint64_t *regs)
 {
+	uint64_t el = cpu_el();
+
 	if (slot == 5) {	/* IRQ from current EL, SPx */
 		irq_handler();
 		return;
@@ -144,11 +205,24 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 	default: con_str("PANIC", "SERROR"); break;
 	}
 	con_hex2("SLOT", "n=", slot, "cpu=", rsr("mpidr_el1"));
+	con_hex("EL", el);
 	con_str("STAGE", stage);
-	con_hex("ESR", rsr("esr_el1"));
-	con_hex("ELR", rsr("elr_el1"));
-	con_hex("FAR", rsr("far_el1"));
-	con_hex("SPSR", rsr("spsr_el1"));
+	if (diag_sctlr) {
+		con_hex("SCTLR", diag_sctlr);
+		con_hex("TTBR0", diag_ttbr0);
+		con_hex("TCR", diag_tcr);
+	}
+	if (el == 2) {
+		con_hex("ESR2", rsr("esr_el2"));
+		con_hex("ELR2", rsr("elr_el2"));
+		con_hex("FAR2", rsr("far_el2"));
+		con_hex("SPSR2", rsr("spsr_el2"));
+	} else {
+		con_hex("ESR", rsr("esr_el1"));
+		con_hex("ELR", rsr("elr_el1"));
+		con_hex("FAR", rsr("far_el1"));
+		con_hex("SPSR", rsr("spsr_el1"));
+	}
 	con_hex("X0", regs[0]);
 	con_hex("X1", regs[1]);
 	con_hex("X30", regs[29]);	/* stashed lr is just above the frame */
@@ -162,6 +236,7 @@ static uintptr_t find_gicr(void);
 void secondary_main(uint64_t idx)
 {
 	sec_mpidr[idx] = rsr("mpidr_el1") | (1ULL << 63);
+	sec_mmfr0[idx] = rsr("id_aa64mmfr0_el1");
 	if (idx == 1) {
 		uintptr_t r = find_gicr();
 		if (r) {
@@ -177,23 +252,28 @@ void secondary_main(uint64_t idx)
 	smc(PSCI_CPU_OFF, 0, 0, 0);
 }
 
-static void __attribute__((unused)) test_smp(void)
+static void test_smp(void)
 {
 	stage = "smp";
-	uint64_t self = rsr("mpidr_el1") & 0xffffff;
-	int64_t ret[NR_CPUS];
 
+	for (int i = 0; i < NR_CPUS; i++)
+		sec_mmfr0[i] = 0xdead;
 	for (int i = 1; i < NR_CPUS; i++)
-		ret[i] = smc(PSCI_CPU_ON, board_cpu_mpidr(i), (uintptr_t)secondary_entry, i);
-	delay_ms(500);
+		(void)smc(PSCI_CPU_ON, board_cpu_mpidr(i), (uintptr_t)secondary_entry, i);
+	delay_ms(800);
+
+	/* MMFR0.TGran16 is inverted: 0 = 16K unsupported, 1..15 = supported. */
+	con_hex2("C0", "t16=", (uint32_t)((rsr("id_aa64mmfr0_el1") >> 20) & 0xf),
+		 "p=", (uint32_t)(rsr("id_aa64mmfr0_el1") & 0xf));
 	for (int i = 1; i < NR_CPUS; i++) {
-		char label[] = "CPU0";
-		label[3] = '0' + i;
-		if (board_cpu_mpidr(i) == self)
-			con_str(label, "is boot cpu");
+		char label[] = "C0";
+		label[1] = (char)('0' + i);
+		uint64_t v = sec_mmfr0[i];
+		if (v == 0xdead)
+			con_str(label, "did not run");
 		else
-			con_hex2(label, "ret=", (uint32_t)ret[i], "mpidr=",
-				 (uint32_t)sec_mpidr[i] | (sec_mpidr[i] ? 0 : 0xdead0000));
+			con_hex2(label, "t16=", (uint32_t)((v >> 20) & 0xf),
+				 "p=", (uint32_t)(v & 0xf));
 	}
 }
 
@@ -370,9 +450,48 @@ void shim_main(uint64_t dtb)
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
+#ifdef SHIM_DIAG
+	/* The OP5 panel only maps the framebuffer 1:1 once the whole ABL
+	 * splash region (36 MiB) has been written, not just one screen. */
+	con_fill_region(FB_BASE, 0x2400000ULL, RED);
+#endif
 	con_clear(RED);
 	con_str("SHIM", BOARD_NAME " milestone 4: xnu loader");
+#ifdef SHIM_DIAG
+	{
+		uint64_t el = cpu_el();
+		con_hex2("EL", "cur=", el,
+			 "ras=", (rsr("id_aa64pfr0_el1") >> 28) & 0xf);
+		con_hex2("ISA", "lse=", (rsr("id_aa64isar0_el1") >> 20) & 0xf,
+			 "mpidr=", rsr("mpidr_el1") & 0xff);
+		con_hex2("T16", "v=", (rsr("id_aa64mmfr0_el1") >> 20) & 0xf,
+			 "x", 0);
+		con_hex2("T4", "v=", (rsr("id_aa64mmfr0_el1") >> 28) & 0xf,
+			 "x", 0);
+		con_hex2("PAR", "v=", rsr("id_aa64mmfr0_el1") & 0xf,
+			 "ras=", (rsr("id_aa64pfr0_el1") >> 28) & 0xf);
+		if (el == 2) {
+			/* Catch faults taken at EL2 too: the kernel only
+			 * installs a VBAR_EL1, and its first instructions
+			 * (OSLAR_EL1) are ARMv8.2 writes. */
+			wsr("vbar_el2", (uint64_t)vectors);
+			isb();
+			con_hex2("EL2", "hcr=", (uint32_t)rsr("hcr_el2"),
+				 "sctlr=", (uint32_t)rsr("sctlr_el2"));
+		}
+	}
+#endif
 	con_skip();
+#if defined(SHIM_DIAG) && !defined(SHIM_BIGBOOT)
+	test_smp();
+	stage = "loader";
+#endif
+#ifdef SHIM_CALIB
+	stage = "calib";
+	calib_pattern();
+	delay_ms(120000);
+	reset(20);
+#endif
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);
 	con_skip();
