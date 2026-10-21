@@ -1,6 +1,6 @@
 # OnePlus 5 (cheeseburger) iOS 16 bring-up plan
 
-Status: M0 done; M1 PASSED on hardware (2026-10-21); M2 pending kernel build
+Status: M0 done; M1 PASSED on hardware (2026-10-21); M2 kernel built, boot pending
 Target date: 2026-10-20
 Base project: `ios-sweet` (XNU 8796 / iOS 16.7.16 userland on Qualcomm hardware)
 
@@ -86,11 +86,29 @@ M1 PASSED on hardware (2026-10-21 ~00:20 local):
   framebuffer usable on the OP5.
 - The raw (non-gzip) shim did not boot; OP5 ABL needs `Image.gz + DTB tail`.
 
+M2 kernel build PASSED (2026-10-21):
+
+- Actions enabled on `lss717/ios-sweet`; `xnu.yml` dispatched with
+  `machine_config=OP5`, run **39546720041** succeeded (7m15s).
+- Kernel `xnu/out-op5/kernel.development.op5`, Mach-O arm64, sha256
+  `41d25054...b750`; contains `Kryo 280`, `oneplus,cheeseburger` and the
+  open-source asm/pmap.
+- Build fixes: OP5 early framebuffer (`0x9d600000`, 1080x1920), the
+  libpthread/BearSSL Makefile conditions now match `SWEET OP5`, and
+  `config/MASTER.arm64.op5` (patch 0083) stops `doconf -soc op5` from using
+  the generic config.
+- M2 payload/image built, not booted (no hardware this session):
+  `shim/out/payload-op5-M2.bin` and `shim/out/shim-boot-op5-M2.img`
+  (sha256 `dce93bc4...500e`, cmdline `cpus=1 ... ufsroot=cache`).
+
 Not done yet:
 
-- OP5 XNU kernel build and M2 (UFS root + launchd).
-- GitHub Actions is not running on the fork yet; enable it and dispatch
-  `xnu.yml` with `machine_config=OP5`.
+- M2 boot on hardware (UFS root + launchd) and `cpus=8`.
+- A valid mini HFS+ root.  This WSL2 host has no `hfsplus` kernel module and
+  `apfs-fuse` is not packaged; `hfsprogs` only creates an empty image.  A
+  locally patched `libhfsp` writer was not reliable enough to use.  Build the
+  root on a host/Linux guest with HFS+ write support, then flash it to
+  `cache` (or `userdata` for M3).
 
 This is a bring-up plan, not a usable daily phone OS. The same limitations as
 sweet apply: no GPU, Wi-Fi, Bluetooth, cellular, audio, camera, sensors,
@@ -395,22 +413,22 @@ Kernel-side checkpoints:
 
 ## 7. Next concrete action
 
-1. Connect the OP5 with USB debugging / fastboot and verify it appears in
-   `adb devices` or `fastboot devices`.
-2. Boot TWRP temporarily and back up the partitions listed in M0. Pull the
-   stock `boot.img` and run `unpack_bootimg` on it.
-3. Build and boot the M1 probe image (already verified):
-   `BOARD=op5 PACKAGE=0 ./shim/build.sh` for the compile check, then
-   `BOARD=op5 OP5_BOOT_TEMPLATE=backup/op5/boot.img ./shim/build.sh` for the
-   bootable image (`Image.gz` + DTB tail).
-4. Build the OP5 XNU kernel through GitHub Actions and boot the M2 payload.
+1. Prepare a valid HFS+ mini root **on a host with HFS+ write support**:
+   `/sbin/launchd` = the static init from `tools/mkinit.py`, then `fsck` it.
+2. Connect the OP5 in fastboot, `usbipd attach --wsl --auto-attach --busid
+   <BUSID>`, and `fastboot flash cache mini-hfs.img` (keeps `userdata`).
+3. `fastboot boot shim/out/shim-boot-op5-M2.img` (kernel run 39546720041).
+   Expect `SWEET UFS`, `BSD root: ufsroot0`, `hfs: mounted`, `exec launchd`,
+   then `SWEET userspace: init running as PID 1`; pull the persistent log via
+   TWRP.  Then retry with `cpus=8`.
+4. For M3, build the iPhone 8 Plus 20H392 root image (needs `apfs-fuse` and
+   HFS+ write support) and flash it to `userdata` after confirmation.
 
 ## 8. Open items
 
 - Exact OxygenOS/firmware version currently installed on the device.
-- GitHub Actions on the fork must be enabled and `xnu.yml` dispatched with
-  `machine_config=OP5`.
-- M2: boot the OP5 XNU build and reach UFS root/launchd.
+- M2: boot the OP5 kernel build and reach UFS root/launchd (payload ready).
+- HFS+ write support on the WSL2 host (or a Linux guest) for the root image.
 - Confirm whether PM8998 L6/L28 are on before the touch driver is written.
 - Expand the 8 GB high-bank size after the live FDT is available.
 - Touch/display/keys are still M3/M4 work.

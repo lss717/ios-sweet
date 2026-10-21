@@ -50,10 +50,53 @@ Nothing is flashed to boot/recovery/modem/persist. Full plan: `docs/ONEPLUS5.md`
   reboot-bootloader, then retry. Raw stock/TWRP images failed in that state
   too; it is not a permanent bootloader restriction.
 
-**Next:** enable GitHub Actions on the `lss717/ios-sweet` fork (it is a fork;
-no runs yet), dispatch `xnu.yml` with `machine_config=OP5`, download the
-kernel artifact, then build the M2 payload with the OP5 ADT and a root image.
-Watch for ARMv8.0 SIGILL and the 4+4 CPU startup.
+**M2 kernel build PASSED (2026-10-21, this session).** GitHub Actions is now
+enabled on the fork and `gh` is authenticated as `lss717`.  `xnu.yml` with
+`machine_config=OP5` succeeded: **run 39546720041**, 7m15s.  Kernel:
+`xnu/out-op5/kernel.development.op5`, Mach-O arm64, 17206064 bytes, sha256
+`41d25054df226bc7a7565bbf68cb78a62cf2ab729aef146d99fc1665d115b750`.
+It contains `Kryo 280`, `oneplus,cheeseburger`, the OP5 CPU validation and the
+SWEET open-source asm/pmap.
+
+Three build fixes were needed (commits `0e54f09`, `0b878c3`, `70377ad`):
+- `0010`/`0012`: the early console wrote sweet's `0x9c000000`/1080x2400; OP5
+  now uses `0x9d600000`/1080x1920 (the same 32 MB block, +0x1600000 in the
+  final alias).  Verified in the built kernel: `_start_first_cpu` loads
+  `0x9ddc7400` (= `0x9d600000 + 1888*4320`).
+- `0019`/`0020`: the libpthread/BearSSL Makefile blocks matched only
+  `MACHINE_CONFIG=SWEET`, so OP5 lost `inner.h`/`-mgeneral-regs-only`; now
+  they match `SWEET OP5`.  The pthread include path also gets
+  `bsd/sweet_hfs` for the staged `TargetConditionals.h`.
+- `0083-op5-master-config.patch`: `doconf -soc op5` fell back to the generic
+  `MASTER.arm64`, so the link missed the open-source asm/pmap.  OP5 now has
+  `config/MASTER.arm64.op5`, a copy of the final `MASTER.arm64.sweet`.
+
+M2 payload/boot image built locally (not booted; user chose no hardware
+today):
+- ADT: `shim/out/op5-M2.adt` (sha256 `12c7bfcf...b86ebb`)
+- payload: `shim/out/payload-op5-M2.bin` (sha256 `acac90ec...f5e2`)
+- v0 image: `shim/out/shim-boot-op5-M2.img` (sha256 `dce93bc4...500e`),
+  cmdline `cpus=1 ... rd=ufsroot0 ufsroot=cache ...` (console visible).
+- Ramdisk in the boot image is byte-identical to the payload; DTB tail comes
+  from `backup/op5/boot.img`.
+
+**M2 root blocker (next session):** the host is WSL2, whose kernel has no
+`hfsplus` module and `apfs-fuse` is not packaged; `hfsprogs` can create an
+HFS+ image but not populate it.  A locally built `libhfsp` writer can insert a
+static `/sbin/launchd` but its write path is unsafe (it corrupted the extents
+B-tree; several endian/offset bugs were found).  **No valid mini HFS root
+exists yet.**  Options: fix libhfsp (it needs `volume_open`'s volume-header
+write at 512-byte block 2, big-endian B-tree backpointers, `UInt32` typedefs,
+thread records), or use a Linux guest/host with the real `hfsplus` driver.
+The plan is still to flash the mini root to the **cache** partition (keeps
+Android `userdata`) and boot `ufsroot=cache rd=ufsroot0`.
+
+**Next:** next hardware session, attach the phone (Power+VolDown, then
+`usbipd attach --wsl --auto-attach --busid <BUSID>`), `fastboot boot
+shim/out/shim-boot-op5-M2.img` first with a kernel-only/ramdisk test or after
+writing the mini root to `cache`; watch for ARMv8.0 SIGILL, 4+4 CPU startup,
+UFS root and launchd.  Then `cpus=8`.  M3/M4 (8 Plus display/root,
+keys/Home/Synaptics touch) are untouched.
 
 **Important open risks:** Kryo 280 is ARMv8.0 (hence the separate compile
 flags); touch is Synaptics S3320 over BLSP I2C with PM8998 L6/L28 rails (RPM,
@@ -79,27 +122,17 @@ same state).
   d66cbbc7...e0831562).
 - `shim/out/shim-boot-op5-M1-verified.img` (sha256
   e5b9ff8b...a71d589) - M1 gzip shim + stock DTB tail, trimmed.
+- `shim/out/shim-boot-op5-M2.img` (sha256 dce93bc4...500e) - OP5 kernel run
+  39546720041 + `op5-M2.adt`, not booted yet.
+- `xnu/out-op5/kernel.development.op5` (sha256 41d25054...b750).
 - `research/ipsw-x/d21ap.adt` - real iPhone 8 Plus device tree (gitignored).
 - Photo `/home/ls/webwxgetmsgimg.jpg` (M1 panel).
 
 **Git state:** `main` is pushed to `lss717/ios-sweet`; latest OP5 commits are
-`52fb90b`, `5475742`, `7e6a2df` (M0/M1 results, gzip/DTB packaging fix).
+`0e54f09` (early FB), `0b878c3` (provider config), `70377ad` (OP5 master
+config); M0/M1 were `52fb90b`, `5475742`, `7e6a2df`.
 `shim/build.sh BOARD=op5` now produces the correct `Image.gz + DTB tail` +
 v0 image.
-
-**Next action (M2):** the OP5 kernel is not built yet.  The repo is a fork and
-GitHub Actions has no runs (Actions not enabled).  Either enable Actions in the
-fork settings and dispatch `xnu.yml` with `machine_config=OP5`, or authenticate
-the installed `~/.local/bin/gh` (`gh auth login`) and run:
-```
-gh workflow enable xnu.yml -R lss717/ios-sweet
-gh workflow run xnu.yml -R lss717/ios-sweet -f machine_config=OP5
-gh run watch
-gh run download <run-id> -R lss717/ios-sweet -n xnu-kernel -D xnu/out-op5
-```
-Then build the M2 payload with the OP5 ADT + a root image and boot it; watch
-for ARMv8.0 SIGILL, 4+4 CPU startup, UFS root and launchd.  M3/M4 (8 Plus
-display/root, keys/Home/Synaptics touch) are untouched.
 
 ---
 
