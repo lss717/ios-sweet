@@ -1,6 +1,8 @@
 # OnePlus 5 (cheeseburger) iOS 16 bring-up plan
 
-Status: M0 done; M1 PASSED on hardware (2026-10-21); M2 kernel built, boot pending
+Status: M0 done; M1 PASSED on hardware; M2 kernel and boot images built and
+hash-verified (2026-10-21); M2 boot pending (phone not attached to the primary
+host yet)
 Target date: 2026-10-20
 Base project: `ios-sweet` (XNU 8796 / iOS 16.7.16 userland on Qualcomm hardware)
 
@@ -69,9 +71,8 @@ M0 done on the phone (2026-10-21):
   section, followed by all-zero 64 MB partition padding.  TWRP has the same
   layout with 7 appended DTBs.
 - `fastboot boot` occasionally returns `Failed to load/authenticate boot
-  image: 00000050` after a USB re-enumeration, but succeeds after re-attaching
-  with usbipd and/or re-entering the bootloader.  Do not treat one failure as
-  a permanent restriction.
+  image: 00000050` after a USB re-enumeration, but succeeds after re-entering
+  the bootloader.  Do not treat one failure as a permanent restriction.
 
 M1 PASSED on hardware (2026-10-21 ~00:20 local):
 
@@ -99,19 +100,35 @@ M2 kernel build PASSED (2026-10-21):
   the generic config.
 - M2 payload/image built, not booted (no hardware this session):
   `shim/out/payload-op5-M2.bin` and `shim/out/shim-boot-op5-M2.img`
-  (sha256 `dce93bc4...500e`, cmdline `cpus=1 ... ufsroot=cache`).
+  (sha256 `dce93bc4...500e`; boot args `cpus=1 ... ufsroot=cache` are inside
+  the payload ADT, not in the boot header cmdline).
 
 Host migration (2026-10-21): the project moved to `ls@192.168.10.127`
-(Ubuntu 24.04, x86_64).  All gitignored artifacts and tooling were copied and
-hash-verified.  That host has the real `hfsplus` kernel module, so the mini
-root was built there: `shim/out/op5-root-mini.img` (128 MiB, `fsck` OK) with
-`/sbin/launchd` = the static init.
+(Ubuntu 24.04, x86_64), which is now the **only active host**; the WSL/USBIPD
+machine is retired and no longer used.  All gitignored artifacts and tooling
+were copied and hash-verified.  This host has the real `hfsplus` kernel module,
+so the mini root was built there: `shim/out/op5-root-mini.img` (128 MiB,
+`fsck` OK) with `/sbin/launchd` = the static init.
+
+Verified on 2026-10-21 (no hardware action):
+
+- `main` = `origin/main` = `b091e62`, clean tree, `tools/validate-repo.py`
+  passes (83 patches).
+- CI `39546720041` (OP5) is the newest run and it succeeded; nothing newer.
+- M2 image: header v0, gzip shim kernel, ramdisk byte-identical to the
+  payload; kernel arguments come from the ADT in the payload, not from the
+  boot header cmdline.
+- Mini root `fsck` OK; the static init is present intact at offset `0x202000`.
 
 Not done yet:
 
 - M2 boot on hardware (UFS root + launchd) and `cpus=8`.
-- Flash the mini root to the `cache` partition and boot the M2 image from the
-  host that has the phone attached.
+- Attach the phone to 127, confirm the `cache` partition size
+  (`blockdev --getsize64 /dev/block/by-name/cache` in TWRP; the image is
+  128 MiB), flash the mini root to `cache`, then boot the M2 image.
+- M3 prerequisites: `apfs-fuse` is not installed on 127 (needs
+  `sudo apt install apfs-fuse`) and the iPhone 8 Plus 20H392 IPSW is not
+  downloaded yet.
 
 This is a bring-up plan, not a usable daily phone OS. The same limitations as
 sweet apply: no GPU, Wi-Fi, Bluetooth, cellular, audio, camera, sensors,
@@ -215,7 +232,8 @@ No kernel changes yet.
 - Confirm `/dev/block/by-name/userdata` exists in recovery and record its size.
 - Host tools: `aarch64-linux-gnu-gcc`, `mkbootimg`/`unpack_bootimg`,
   `dtbtool` or `mkqcdtbootimg`, `apfs-fuse`, `hfsprogs`, `rsync`,
-  `img2simg`/`simg2img`, `gh`, `ipsw`, `python3`.
+  `img2simg`/`simg2img`, `gh`, `ipsw`, `python3`.  On 127 everything is
+  present except **`apfs-fuse`** (needed for M3, not yet installed).
 
 Exit criteria: stock boot format and DTB packaging are understood; backups
 are verified; `fastboot boot` is known to work.
@@ -416,21 +434,27 @@ Kernel-side checkpoints:
 
 ## 7. Next concrete action
 
-1. On the host with the phone, enter fastboot (`usbipd attach --wsl
-   --auto-attach --busid <BUSID>` if using WSL) and run
-   `fastboot flash cache shim/out/op5-root-mini.img` (keeps `userdata`).
-2. `fastboot boot shim/out/shim-boot-op5-M2.img` (kernel run 39546720041).
+1. Attach the phone to 127 and enter fastboot (`adb reboot bootloader` from
+   Android, otherwise Power+VolDown); `fastboot devices` must list it.
+2. Check that the `cache` partition fits the 128 MiB image: in TWRP run
+   `blockdev --getsize64 /dev/block/by-name/cache`.
+3. `fastboot flash cache shim/out/op5-root-mini.img` (keeps `userdata`).
+4. `fastboot boot shim/out/shim-boot-op5-M2.img` (kernel run 39546720041).
    Expect `SWEET UFS`, `BSD root: ufsroot0`, `hfs: mounted`, `exec launchd`,
    then `SWEET userspace: init running as PID 1`; pull the persistent log via
    TWRP.  Then retry with `cpus=8`.
-4. For M3, build the iPhone 8 Plus 20H392 root image (needs `apfs-fuse` and
-   HFS+ write support) and flash it to `userdata` after confirmation.
+5. For M3, build the iPhone 8 Plus 20H392 root image (needs `apfs-fuse`:
+   `sudo apt install apfs-fuse`, plus the downloaded IPSW) and flash it to
+   `userdata` after confirmation.
 
 ## 8. Open items
 
 - Exact OxygenOS/firmware version currently installed on the device.
 - M2: boot the OP5 kernel build and reach UFS root/launchd (payload ready).
-- HFS+ write support on the WSL2 host (or a Linux guest) for the root image.
+- `cache` partition size on the OP5 is not recorded yet; confirm before the
+  flash.
+- M3 tooling on 127: `apfs-fuse` missing (`sudo apt install apfs-fuse`) and
+  the iPhone 8 Plus 20H392 IPSW not downloaded.
 - Confirm whether PM8998 L6/L28 are on before the touch driver is written.
 - Expand the 8 GB high-bank size after the live FDT is available.
 - Touch/display/keys are still M3/M4 work.

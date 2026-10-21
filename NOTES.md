@@ -46,9 +46,9 @@ Nothing is flashed to boot/recovery/modem/persist. Full plan: `docs/ONEPLUS5.md`
   LUN0 lastlba=0x1c627f?, 4K blocks, GPT EFI PART 32 entries, `cache` and
   `userdata` ext4. ABL leaves UFS + framebuffer usable.
 - `fastboot boot` sometimes returns `Failed to load/authenticate boot image:
-  00000050` right after a USB re-enumeration; re-attach with usbipd and/or
-  reboot-bootloader, then retry. Raw stock/TWRP images failed in that state
-  too; it is not a permanent bootloader restriction.
+  00000050` right after a USB re-enumeration; re-enter the bootloader
+  (`reboot-bootloader` or Power+VolDown), then retry. Raw stock/TWRP images
+  failed in that state too; it is not a permanent bootloader restriction.
 
 **M2 kernel build PASSED (2026-10-21, this session).** GitHub Actions is now
 enabled on the fork and `gh` is authenticated as `lss717`.  `xnu.yml` with
@@ -75,18 +75,20 @@ M2 payload/boot image built locally (not booted; user chose no hardware
 today):
 - ADT: `shim/out/op5-M2.adt` (sha256 `12c7bfcf...b86ebb`)
 - payload: `shim/out/payload-op5-M2.bin` (sha256 `acac90ec...f5e2`)
-- v0 image: `shim/out/shim-boot-op5-M2.img` (sha256 `dce93bc4...500e`),
-  cmdline `cpus=1 ... rd=ufsroot0 ufsroot=cache ...` (console visible).
+- v0 image: `shim/out/shim-boot-op5-M2.img` (sha256 `dce93bc4...500e`);
+  boot args `cpus=1 ... rd=ufsroot0 ufsroot=cache ...` are inside the payload
+  ADT, not in the boot header cmdline (console visible via the ADT).
 - Ramdisk in the boot image is byte-identical to the payload; DTB tail comes
   from `backup/op5/boot.img`.
 
 **Host migration DONE (2026-10-21):** the project now lives on
-`ls@192.168.10.127` (Ubuntu 24.04, x86_64) in `/home/ls/ios-sweet`.  The
-gitignored artifacts (`backup/`, `recovery/`, `research/ipsw-x/`, `shim/out/`,
+`ls@192.168.10.127` (Ubuntu 24.04, x86_64) in `/home/ls/ios-sweet`; this is the
+**only active host**.  The WSL/USBIPD machine is **retired and no longer
+used** (user decision 2026-10-21): the phone plugs into 127.  The gitignored
+artifacts (`backup/`, `recovery/`, `research/ipsw-x/`, `shim/out/`,
 `xnu/out-op5/`) were rsynced and hash-verified; adb/fastboot/gh/ipsw,
-`~/.config/gh`, the adb key and the static init were copied too.  The target
-has a real `hfsplus` kernel module, so the WSL2 HFS blocker is gone.  The WSL
-copy is kept as a cold backup; **127 is now the primary host.**
+`~/.config/gh`, the adb key and the static init were copied too.  This host
+has a real `hfsplus` kernel module, so the WSL2 HFS blocker is gone.
 
 **M2 mini HFS root READY (on 127):** `shim/out/op5-root-mini.img` (128 MiB,
 sha256 `c4a8610a...474b`), `/sbin/launchd` = the static init (16635 bytes,
@@ -94,12 +96,14 @@ sha256 `f5de3714...9bf1`); `fsck.hfsplus -f -y` reports the volume OK.  Flash
 it to the **cache** partition (keeps Android `userdata`) and boot with
 `ufsroot=cache rd=ufsroot0`.
 
-**Next:** hardware session from whichever host has the phone (currently the
-WSL/USBIPD box, or 127 if the phone is plugged there): `fastboot flash cache
-shim/out/op5-root-mini.img`, then `fastboot boot
+**Next:** attach the phone to 127 (it was not attached on 2026-10-21 15:0x:
+`fastboot devices`/`adb devices` empty, no phone in `lsusb`).  Then, in
+fastboot: **check the cache partition size first** (`blockdev --getsize64
+/dev/block/by-name/cache` in TWRP; the mini root is 128 MiB), then
+`fastboot flash cache shim/out/op5-root-mini.img`, then `fastboot boot
 shim/out/shim-boot-op5-M2.img`; watch for ARMv8.0 SIGILL, 4+4 CPU startup,
-UFS root and launchd.  Then `cpus=8`.  M3/M4 (8 Plus display/root,
-keys/Home/Synaptics touch) are untouched.
+UFS root and launchd.  Then `cpus=8`.  M3/M4 (8 Plus display/root, keys/Home/
+Synaptics touch) are untouched.
 
 **Important open risks:** Kryo 280 is ARMv8.0 (hence the separate compile
 flags); touch is Synaptics S3320 over BLSP I2C with PM8998 L6/L28 rails (RPM,
@@ -108,15 +112,13 @@ not RPMh); UFS root/HFS and display scaling are still untested on OP5.
 ### >>> STOP 2026-10-21: resume here <<<
 
 **Phone / USB state at stop:** the M1 shim ran and the photo confirmed UFS +
-GPT (`cache`/`userdata` ext4).  The shim resets after ~3 min; the phone is now
-likely back in Android or TWRP and its USB is detached from WSL.  To resume:
-phone to bootloader (`adb reboot bootloader` if Android, otherwise
-Power+VolDown), then on Windows
-`usbipd attach --wsl --auto-attach --busid 1-9` (or the current BUSID), then
-`fastboot devices`.  If `fastboot boot` returns
-`Failed to load/authenticate boot image: 00000050`, re-attach/reboot the
+GPT (`cache`/`userdata` ext4).  The shim resets after ~3 min; the phone was
+left in Android/TWRP and on 2026-10-21 15:0x it was **not attached to 127**.
+To resume: phone to bootloader (`adb reboot bootloader` if Android, otherwise
+Power+VolDown), plug it into 127, then `fastboot devices`.  If `fastboot boot`
+returns `Failed to load/authenticate boot image: 00000050`, re-enter the
 bootloader and retry; this was transient (stock and TWRP images failed in the
-same state).
+same state too).
 
 **Verified artifacts (all outside git):**
 - `backup/op5/{boot,recovery,persist,modemst1,modemst2,fsg,fsc}.img` +
@@ -131,11 +133,37 @@ same state).
 - `research/ipsw-x/d21ap.adt` - real iPhone 8 Plus device tree (gitignored).
 - Photo `/home/ls/webwxgetmsgimg.jpg` (M1 panel).
 
-**Git state:** `main` is pushed to `lss717/ios-sweet`; latest OP5 commits are
-`0e54f09` (early FB), `0b878c3` (provider config), `70377ad` (OP5 master
-config); M0/M1 were `52fb90b`, `5475742`, `7e6a2df`.
-`shim/build.sh BOARD=op5` now produces the correct `Image.gz + DTB tail` +
-v0 image.
+**Doc audit 2026-10-21 (software only, no hardware action), observations:**
+- `main` = `origin/main` = `b091e62`, working tree clean;
+  `tools/validate-repo.py` reports 83 patches (0001-0083 contiguous), 16 Python
+  tools and 8 shell scripts OK.
+- CI: `gh run list` shows `39544108506` (failure), `39546115820` (failure),
+  `39546720041` (success, 7m15s, OP5); nothing newer.
+- Hashes re-checked: kernel `41d25054...b750` (17206064 bytes), M2 image
+  `dce93bc4...500e`, mini root `c4a8610a...474b`.
+- M2 image: boot header v0, kernel is the 8351273-byte gzip shim, ramdisk
+  16613376 bytes and byte-identical to `payload-op5-M2.bin`.  The kernel
+  arguments (`rd=ufsroot0 ufsroot=cache ... cpus=1`) live in the ADT inside the
+  payload, **not** in the boot header cmdline (that one is still the stock
+  Android line) - do not read that as a regression.
+- Mini root: `fsck.hfsplus -n` says volume SWEETOP5 is OK; the 16635-byte
+  static init is present intact at image offset `0x202000`.
+- `backup/op5/` still has all seven partition images plus `SHA256SUMS`.
+- M3 prerequisites on 127: `mkfs.hfsplus`, `img2simg`, `ipsw` (`~/.local/bin`)
+  present; **`apfs-fuse` is missing** and needs
+  `sudo apt install apfs-fuse`; the iPhone 8 Plus 20H392 IPSW is not
+  downloaded yet.
+- Inferred, not verified: the OP5 `cache` partition is probably large enough
+  for the 128 MiB mini root (typically >=256 MiB), but its size is not recorded
+  anywhere - check it before flashing.
+
+**Git state:** `main` is pushed to `lss717/ios-sweet`; HEAD is `b091e62`
+(2026-10-21 doc update).  OP5 commits, newest first: `922fa13`/`b091e62`
+(notes/docs), `70377ad` (OP5 master config), `0b878c3` (provider config),
+`0e54f09` (early FB), `5c28aef` (M0/M1 notes), `7e6a2df` (M1 boot fix),
+`5475742` (partition pull helper), `52fb90b` (M1 prep).
+`shim/build.sh BOARD=op5` now produces the correct `Image.gz + DTB tail` + v0
+image.
 
 ---
 
