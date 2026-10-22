@@ -1,7 +1,9 @@
 # OnePlus 5 (cheeseburger) iOS 16 bring-up plan
 
-Status: M0/M1 done; M2 kernel boots XNU on the Kryo 280 cores up to
-`bsd_init` (2026-10-22); root mount/launchd is the next wall
+Status: A line (shim) paused 2026-10-22 - XNU booted on the Kryo 280 cores up
+to `bsd_init`, then stopped at `IOKitInitializeTime`; the project moved to the
+**B line** (UEFI + UniXNU, 4K pages), which reaches the kernel entry and now
+hangs in MMU enable.  See `NOTES.md` (top section) for the current state.
 Target date: 2026-10-20
 Base project: `ios-sweet` (XNU 8796 / iOS 16.7.16 userland on Qualcomm hardware)
 
@@ -31,7 +33,10 @@ would lose about 258 px at the top and bottom. The 8 Plus mode is
 1242x2208 @3x (414x736 points), downsampled by the real device to its
 1080x1920 panel; our virtual display has to do the same.
 
-## 0. Progress (2026-10-20)
+## 0. Progress (2026-10-20, A line - superseded by the B line)
+
+> This section describes the original shim route (A line), which is paused
+> since 2026-10-22.  Current state and next action: `NOTES.md`, top section.
 
 Done locally:
 
@@ -162,6 +167,14 @@ Derived from the downstream MSM8998/cheeseburger device trees in
 | USB | DWC3 `0xa800000`, QUSB2 PHY `0xc012000` | later milestone only |
 | Battery | PMI8998 fuel gauge / bq27541 on I2C7 `0xc1b5000` at `0x55` | first version uses a stub |
 | Storage | UFS 2.1, 128 GB; `userdata` holds the iOS root | 16 GB HFS+ image is enough |
+
+Measured on the device through the B line (2026-10-22, UEFI payload
+`CheeseburgerInfo`): RAM 8 GB (7039 MiB usable / 51 descriptors), UFS logical
+block **4096 B** (not 512 B), main LUN 29,763,584 blocks = 116,264 MiB, GOP
+framebuffer `0x9D400000` 1080x1920 stride 1080 BGRX (`0x7E9000` bytes),
+`userdata` `first_lba 0x14F40` / `last_lba 0x1C627FA` = 115,928 MiB, no A/B
+slots, `hw-revision 20001`.  The firmware memory map has a hole at
+`0x17A000000-0x180000000`: do not place the kernel window there.
 
 ### 8 GB memory layout
 
@@ -433,29 +446,45 @@ Kernel-side checkpoints:
 
 ## 7. Next concrete action
 
+The project is on the **B line** (UEFI + UniXNU, 4K pages) since 2026-10-22;
+the A line (shim + payload ADT) is paused.  Full state: `NOTES.md`, top
+section; B-line repositories: `~/UniXNU`, `~/UniXNU-cheeseburger`,
+`~/edk2-msm8998`.
+
+**B line (current):**
+
 1. Attach the phone to 127 and enter fastboot (`adb reboot bootloader` from
    Android, otherwise Power+VolDown); `fastboot devices` must list it.
-2. Check that the `cache` partition fits the 128 MiB image: in TWRP run
-   `blockdev --getsize64 /dev/block/by-name/cache`.
-3. `fastboot flash cache shim/out/op5-root-mini.img` (keeps `userdata`).
-4. `fastboot boot shim/out/shim-boot-op5-M2.img` (kernel run 39546720041).
-   Expect `SWEET UFS`, `BSD root: ufsroot0`, `hfs: mounted`, `exec launchd`,
-   then `SWEET userspace: init running as PID 1`; pull the persistent log via
-   TWRP.  Then retry with `cpus=8`.
-5. For M3, build the iPhone 8 Plus 20H392 root image (needs `apfs-fuse`:
-   `sudo apt install apfs-fuse`, plus the downloaded IPSW) and flash it to
-   `userdata` after confirmation.
+2. `fastboot boot /home/ls/UniXNU-cheeseburger/out/cheeseburger/boot/boot-physbase.img`
+   (sha256 `4847be5f…6b49`; carries the DarwinBoot `VirtBase`/`PhysicalBase`
+   fix, payload `payload-stage3b.img` `1d1b8fd4…7934`).
+3. A fourth early colour band -> the MMU is through; swap in the panic
+   kernel (`payload-ci.img`) and continue.  Still three bands -> inspect
+   TTBR/TCR (stage 4 probe `_set_mmu_ttb`) or isolate the kernel in QEMU.
+
+**A line (paused fallback):**
+
+4. `fastboot boot shim/out/shim-boot-op5-bigcore-bigadt.img` (sha256
+   `fe5c7c97…1d37`) - never booted.  It tests the `os_log`/firehose theory
+   behind the `IOKitInitializeTime` stop.  The mini HFS root
+   (`shim/out/op5-root-mini.img`) is already flashed to `cache`.
+5. For M3/M4, build the iPhone 8 Plus 20H392 root image (needs `apfs-fuse`:
+   `sudo apt install apfs-fuse`, route A) or the iPad7,1 17.7.11 4K fixture
+   (route B, already cached in `~/UniXNU/out/ipsw/21H461/`).
 
 ## 8. Open items
 
 - Exact OxygenOS/firmware version currently installed on the device.
-- M2: boot the OP5 kernel build and reach UFS root/launchd (payload ready).
-- `cache` partition size on the OP5 is not recorded yet; confirm before the
-  flash.
+- B line: pass MMU enable (`PhysicalBase` fix compiled, not booted); explain
+  `owned=0` in DarwinBoot; then panic-free userland bring-up.
+- A line: verify `shim-boot-op5-bigcore-bigadt.img` (never booted).
+- Firmware memory hole `0x17A000000-0x180000000` is not usable for the kernel
+  window.
+- UFS 4096 B logical blocks (measured); driver paths must not assume 512 B.
 - M3 tooling on 127: `apfs-fuse` missing (`sudo apt install apfs-fuse`) and
-  the iPhone 8 Plus 20H392 IPSW not downloaded.
+  the iPhone 8 Plus 20H392 IPSW not downloaded; route B uses the cached
+  iPad7,1 17.7.11 fixture instead.
 - Confirm whether PM8998 L6/L28 are on before the touch driver is written.
-- Expand the 8 GB high-bank size after the live FDT is available.
 - Touch/display/keys are still M3/M4 work.
 
 ## 8.1 Local commands used
