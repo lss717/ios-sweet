@@ -253,6 +253,16 @@ returns `Failed to load/authenticate boot image: 00000050`, re-enter the
 bootloader and retry; this was transient (stock and TWRP images failed in the
 same state too).
 
+**2026-10-23 device state:** the bootloader had been re-locked since 10-22
+(`unlocked: no`, `fastboot boot` -> `boot is not allowed in Lock State`,
+`fastboot flashing unlock` -> `Flashing Unlock is not allowed` because the
+Android "OEM unlocking" switch was off).  It was unlocked again by hand:
+**`userdata` is now erased** (Android data gone), `unlocked: yes`, no A/B
+slots.  `cache` and the other partitions were not touched, so the 128 MiB
+mini root is still on `cache`.  The phone is attached and sits in fastboot.
+Beware: `fastboot flashing get_unlock_ability` hangs this ABL; recover with
+`fastboot reboot bootloader` or a manual Power+VolDown.
+
 **Verified artifacts (all outside git):**
 - `backup/op5/{boot,recovery,persist,modemst1,modemst2,fsg,fsc}.img` +
   `SHA256SUMS`; `userdata` = `/dev/block/sda13`, 121560084480 bytes.

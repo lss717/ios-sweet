@@ -54,11 +54,10 @@ Done locally:
   applies after 0081; the sweet-specific branches remain unchanged).
 
 The preparation commit is `52fb90b` and has been pushed to
-`lss717/ios-sweet`.  The repository is a fork and GitHub Actions has not run
-yet (no workflow runs are visible); enable Actions in the fork settings and
-dispatch `xnu.yml` with `machine_config=OP5` to verify the OP5 build.  The
-default push build is still `SWEET`, which checks that the new patch applies
-and does not regress sweet.
+`lss717/ios-sweet`.  GitHub Actions is enabled in the fork and `xnu.yml` runs
+with `machine_config=OP5` (last OP5 build: run 39633868604).  The default push
+build is still `SWEET`, which checks that the new patch applies and does not
+regress sweet.
 
 M0 done on the phone (2026-10-21):
 
@@ -435,23 +434,27 @@ Kernel-side checkpoints:
 
 1. Attach the phone to 127 and enter fastboot (`adb reboot bootloader` from
    Android, otherwise Power+VolDown); `fastboot devices` must list it.
-2. Check that the `cache` partition fits the 128 MiB image: in TWRP run
-   `blockdev --getsize64 /dev/block/by-name/cache`.
-3. `fastboot flash cache shim/out/op5-root-mini.img` (keeps `userdata`).
-4. `fastboot boot shim/out/shim-boot-op5-M2.img` (kernel run 39546720041).
-   Expect `SWEET UFS`, `BSD root: ufsroot0`, `hfs: mounted`, `exec launchd`,
-   then `SWEET userspace: init running as PID 1`; pull the persistent log via
-   TWRP.  Then retry with `cpus=8`.
-5. For M3, build the iPhone 8 Plus 20H392 root image (needs `apfs-fuse`:
+2. `fastboot boot shim/out/shim-boot-op5-bigcore-bigadt.img` (sha256
+   `fe5c7c97…1d37`, kernel from CI run 39633868604 with the `os_log`/firehose
+   patch, 4-big-core ADT).  Expect `bsd_init: calling vfsinit`, then
+   `SWEET UFS`, `hfs: mounted`, `exec launchd`; pull the persistent log via
+   TWRP from `cache`.  Then retry with more big cores.
+   The 128 MiB mini root is already flashed to `cache` (2026-10-21); its size
+   is not recorded, so check it in TWRP before ever reflashing it.
+3. If the panel is ambiguous, pull the ring from the root partition in TWRP:
+   `adb exec-out "dd if=/dev/block/by-name/cache bs=4096 skip=64511 count=1025" > ring.bin`.
+4. For M3, build the iPhone 8 Plus 20H392 root image (needs `apfs-fuse`:
    `sudo apt install apfs-fuse`, plus the downloaded IPSW) and flash it to
-   `userdata` after confirmation.
+   `userdata` after confirmation.  `userdata` was erased by the bootloader
+   unlock on 2026-10-23, so it is empty now.
 
 ## 8. Open items
 
 - Exact OxygenOS/firmware version currently installed on the device.
-- M2: boot the OP5 kernel build and reach UFS root/launchd (payload ready).
-- `cache` partition size on the OP5 is not recorded yet; confirm before the
-  flash.
+- M2: boot `shim/out/shim-boot-op5-bigcore-bigadt.img` (never booted) and
+  reach UFS root/launchd.
+- `cache` partition size is not recorded yet; the 128 MiB mini root is
+  already flashed there, so only re-check before reflashing.
 - M3 tooling on 127: `apfs-fuse` missing (`sudo apt install apfs-fuse`) and
   the iPhone 8 Plus 20H392 IPSW not downloaded.
 - Confirm whether PM8998 L6/L28 are on before the touch driver is written.
