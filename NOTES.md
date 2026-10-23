@@ -1,160 +1,5 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## Route change: B line (UniXNU / 4K) is the main track (2026-10-22)
-
-**>>> READ THIS FIRST.  The A line (shim/payload, everything below) is paused
-as of 2026-10-22 00:45. <<<**
-
-The OnePlus 5 port no longer boots XNU from the fastboot `boot` image with our
-shim.  It boots through **UEFI**: `edk2-msm8998` firmware -> UniXNU menu ->
-DarwinBoot -> 64 MiB payload volume -> **4K-page** `kernel.macho` (51.6 MB).
-Target identity is unchanged: iPhone10,2 / iOS 16.7.16 (20H392).
-
-Repositories and HEADs (2026-10-22, all pushed to `lss717`):
-
-| Path | Repo | HEAD / branch |
-| --- | --- | --- |
-| `~/ios-sweet` | `ios-sweet` | `e97e3ec` (main) - this file, A line |
-| `~/UniXNU` | `UniXNU` | `8193701` (main); plan+status in `plans/oneplus5-cheeseburger/` |
-| `~/UniXNU-cheeseburger` | `UniXNU-cheeseburger` | `22742e3` (main); `board*.toml`, `scripts/`, `out/` |
-| `~/edk2-msm8998` | `edk2-msm8998` | `1ffb934`, branch `unixnu-cheeseburger` |
-
-### B0 - device data (measured, replaces the old guesses)
-
-| Item | Value |
-| --- | --- |
-| RAM | 8 GB (UEFI map 7039 MiB / 51 descriptors); full 8 GiB now declared to the kernel (`22742e3`) |
-| UFS logical block | **4096 B** |
-| Main LUN | 29,763,584 blocks = 116,264 MiB (pick it by capacity, not by enumeration order) |
-| `userdata` | `first_lba 0x14F40` (85,824), `last_lba 0x1C627FA`; 29,677,755 blocks = 115,928 MiB |
-| `userdata` cross-check | 29,677,755 x 4096 = `0x1C4D8BB000` = `getvar partition-size:userdata` |
-| GOP framebuffer | `0x9D400000`, 1080x1920, stride 1080, BGRX, size `0x7E9000` |
-| Slots | no A/B; `unlocked: yes`; `hw-revision: 20001` |
-| Other LUNs | 4 MiB x2, 128 MiB, 4096 MiB, 1536 MiB (GPT there too) |
-
-`fastboot getvar all` is saved at `~/UniXNU/.cache/firmware/op5-getvar.txt`
-(not in git).
-
-### B1 - G1 gate PASSED (2026-10-22)
-
-`fastboot boot ~/UniXNU/out/cheeseburger/b1b/boot-op5-b1b-safe.img` is accepted
-by ABL (`Booting OKAY`).  Confirmed on the panel:
-
-- UEFI boots and prints to the screen; UniXNU menu (`OnePlus 5 B1`,
-  `Exit to firmware`, visible countdown).
-- The payload FAT volume mounts (`\EFI\UniXNU\unixnu.toml` is read), so
-  `CheeseburgerBootMemoryDxe` (live DTB at `0x83300000`,
-  `/chosen/linux,initrd-*`) and the FAT stack work.
-- The 35 MiB boot image and the `0x10000000 / 0x12000000 / 0x14000000` layout
-  are accepted by ABL.
-- Keys: Qualcomm `ButtonsDxe` works with no new driver - volume up/down move
-  the highlight, power selects (Enter).
-- `CheeseburgerInfo` sees the `UniXNULoader` protocol (`Success`), 8 BlockIo
-  handles, and the GOP mode 1080x1920 stride 1080.
-- `UNIXNU:` log lines reach the panel with `console = "none"` through
-  `SerialDxe` + `FrameBufferSerialPortLib` at `0x9d400000`.
-- FD free space after dropping `TerminalDxe` and the embedded Linux image:
-  4.97 MiB (`FVMAIN_COMPACT` 1,050,320 B).
-
-### B2 - skeleton, ADT, IPSW cache done (2026-10-22)
-
-`~/UniXNU-cheeseburger`: `board.toml` (B3 iPad7,1 17.7.11 fixture + measured
-values), `board.iphone10-2.toml` (B6 placeholder), `configs/cheeseburger_defconfig`,
-`scripts/make-bootimg.py` (kernel `0x10000000`, ramdisk `0x12000000` + 64 MiB,
-tags `0x18000000`), `scripts/check-cheeseburger.py`, `scripts/check-adt.py`, and
-`scripts/make-cheeseburger-adt.py` (MSM8998: GICD `0x17a00000`, GICR
-`0x17b00000` stride `0x20000`, 19.2 MHz, 4x A73 + 4x A53, UFS node; emits a
-13 KiB Apple-format tree, `check-adt.py` passes).  macOS CI:
-`UniXNU/.github/workflows/macos-cheeseburger.yml`.
-
-IPSW cache (`unixnu ipsw fetch`, HTTP range):
-`~/UniXNU/out/ipsw/21H461/DeviceTree.j120ap.im4p` and
-`044-76040-038.dmg.trustcache` (copies in `~/UniXNU-cheeseburger/.cache/firmware/17.7.11/`).
-`KernelCache` is LZFSE and needs the macOS `compression_tool`, so
-kernel/prelink builds stay on CI/macOS.
-
-### B3 - 4K kernel boots but hangs at MMU enable (2026-10-22, latest)
-
-CI run `39769403554` (kernel + payload): `kernel.macho` `8ee3ae2d…5b16`
-(51.6 MB), `payload.img` `b4755de7…52e7` (64 MiB), local
-`~/UniXNU-cheeseburger/out/cheeseburger/b3/boot-op5-b3.img` `9c120a0f…461d`.
-CI run `39776627855` is the first fully green run including the panic screen.
-
-On the phone: ABL accepts the 65.4 MiB image, UniXNU auto-selects `xnu`,
-DarwinBoot prints
-
-```text
-DARWINBOOT: ARM64 va=0xFFFFFFF00427C000 pa=0x1B007C000 args=0x1B4134000 entry=0x1831EC400 owned=0x00000000
-DARWINBOOT: video base=0x9D400000 display=1 row=4320 width=1080 height=1920 depth=32
-DARWINBOOT: inputs validated; exiting boot services
-```
-
-The kernel entry really runs (green/blue/magenta early probe bars on the
-panel), then the device went to Qualcomm crashdump (`05c6:900e`) and reset -
-it never reached the video console.  Findings since:
-
-- `boot_args->virtBase` used to be the lowest segment `__PRELINK_TEXT`
-  (`0xfffffff00427c000`), while `__TEXT` is at `0xfffffff007004000`.  After
-  the fix the kernel no longer hard-crashes into crashdump but **hangs**.
-- Stage bisect via the patcher's probe: stage 2 (before MMU) draws its bar,
-  **stage 3 (after MMU) does not** -> it hangs in **MMU enable**, not in
-  `arm_vm_init`.
-- Likely cause: `PhysicalBase` still points at the window start, so
-  `VirtBase - Base ~= 0x2D88000` and the first post-MMU fetch lands on the
-  wrong physical page.
-- Confirmed firmware map hole: `0x17A000000-0x180000000` is not accessible
-  (a 256 MiB-window attempt bounced there and UEFI threw
-  `Synchronous Exception at 0x17ABB13E8`).  The memory hole is *not* the cause
-  of the MMU hang (a 2 GiB window at `0x18007C000` is reachable and the entry
-  bars still appear).
-- Open: DarwinBoot reads `owned=0` although the ADT's
-  `darwinboot-memory-size=0x80000000` parses correctly; a diagnostic firmware
-  was built to find out whether it is not read or zeroed.
-
-### B line next action (only one)
-
-```sh
-fastboot boot /home/ls/UniXNU-cheeseburger/out/cheeseburger/boot/boot-physbase.img
-```
-
-- firmware FD `b59f2e49…` (`Address + (VirtBase - Base)` into `boot_args->physBase`),
-  image `4847be5f393b1442980bb3e7331718f571f2557e83976f7d499f886c209b6b49`,
-  payload `payload-stage3b.img` `1d1b8fd4…7934` (stage 3 + 8 GiB ADT).
-- DarwinBoot patch is archived as `patches/darwinboot-virtbase-physbase.patch`
-  in the device repo (submodule reverted; `git -C drivers/DarwinBoot apply`
-  before rebuilding the firmware).
-- A **4th colour band** -> MMU is through, swap in the panic kernel
-  (`payload-ci.img`) and continue.  Still three bands -> look at TTBR/TCR
-  (stage 4 probe `_set_mmu_ttb`) or isolate with QEMU.
-
-### B line backups
-
-TWRP 3.4.0-1 booted with `fastboot boot` (nothing flashed):
-`tools/backup-cheeseburger.sh` dumped 291 MB / 16 partitions + GPT to
-`~/UniXNU/.cache/firmware/backups/20261022-201247/` (gitignored - copy it off
-the machine).  `persist` is on `sda2`, `userdata` on `sda13`.
-
-CI artefacts (kernels, payloads, logs) are archived in
-`~/UniXNU/.cache/firmware/b3/` with a `README.md` of hashes and run IDs
-(gitignored); the boot images themselves live in
-`~/UniXNU-cheeseburger/out/cheeseburger/boot/`.
-
-### B line known traps
-
-- A non-empty ramdisk **must not** use offset 0: a 32 MiB payload overwrites
-  the kernel.  Always set the ramdisk/tags offsets explicitly.
-- `CheeseburgerBootMemoryDxe` reads the live DTB at `PcdDeviceTreeStore=0x83300000`;
-  a mounting payload volume is the proof that DTB and initrd parsing work.
-- All six UFS LUNs show up in UEFI; B5 must select the main LUN by capacity.
-- Removing `LinuxSimpleMassStorage` leaves a "USB Attached SCSI" boot option
-  in `PlatformBootManagerLib` that points at a missing FV file; `UniXNUDxe`
-  puts UniXNU first in `BootOrder`, so it is not reached in practice.
-- Key mapping measured: volume up/down = Up/Down, power = Enter.
-
-**Current blocker for the whole project: the phone is not attached to this
-machine (2026-10-23, `fastboot devices` empty).  Both lines need a boot test
-before anything else can be decided.**
-
 ## OnePlus 5 port started (2026-10-20)
 
 **Scope (confirmed by the user):** OnePlus 5 (cheeseburger) 8 GB / 128 GB,
@@ -162,13 +7,7 @@ already unlocked; iPhone 8 Plus (D21AP / iPhone10,2) iOS 16.7.16 (20H392)
 userland; `userdata` may be erased; host is the current Linux environment.
 Nothing is flashed to boot/recovery/modem/persist. Full plan: `docs/ONEPLUS5.md`.
 
-### >>> A line STOP 2026-10-22 00:45 (paused - see the B line at the top) <<<
-
-**This whole A line (shim + payload ADT + `fastboot boot`) is paused since
-2026-10-22; the project moved to the UEFI/UniXNU "B line" described at the top
-of this file.  The image below was never booted.  Keep it as the fallback: if
-the B line stalls, boot it to test whether the `os_log`/firehose theory was
-right.**
+### >>> STOP 2026-10-22 00:45 (resume here) <<<
 
 **Where it stands:** XNU runs on the OnePlus 5 and boots through
 `bsd_init` up to `bsd_init: calling IOKitInitializeTime`.  The last boot
@@ -405,20 +244,14 @@ not RPMh); UFS root/HFS and display scaling are still untested on OP5.
 
 ### >>> STOP 2026-10-21: resume here <<<
 
-**Phone / USB state at stop (2026-10-21, update 2026-10-23):** the M1 shim ran
-and the photo confirmed UFS + GPT (`cache`/`userdata` ext4).  The shim resets
-after ~3 min; the phone was left in Android/TWRP and on 2026-10-21 15:0x it was
-**not attached to 127**.  On 2026-10-22 the device was used for the B line
-(UEFI) tests all day; on **2026-10-23 it is not attached to this host either**
-(`fastboot devices` and `adb devices` are empty).
+**Phone / USB state at stop:** the M1 shim ran and the photo confirmed UFS +
+GPT (`cache`/`userdata` ext4).  The shim resets after ~3 min; the phone was
+left in Android/TWRP and on 2026-10-21 15:0x it was **not attached to 127**.
 To resume: phone to bootloader (`adb reboot bootloader` if Android, otherwise
 Power+VolDown), plug it into 127, then `fastboot devices`.  If `fastboot boot`
 returns `Failed to load/authenticate boot image: 00000050`, re-enter the
 bootloader and retry; this was transient (stock and TWRP images failed in the
 same state too).
-
-`docs/ONEPLUS5.md` still carried the 10-21 next-action list at the time of
-writing; the authoritative next action is the one at the top of this file.
 
 **Verified artifacts (all outside git):**
 - `backup/op5/{boot,recovery,persist,modemst1,modemst2,fsg,fsc}.img` +
